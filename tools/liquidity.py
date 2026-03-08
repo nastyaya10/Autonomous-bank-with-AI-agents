@@ -1,12 +1,16 @@
-import random
+from models.schemas import Balance
+from tools.convert_currency import convert_currency
 
-def check_liquidity(currency: str, amount: float) -> dict:
-    available = random.choice([True, False])
-    balance = round(random.uniform(amount * 0.5, amount * 1.5), 2)
+
+def check_liquidity(currency: str, amount: float, balance: Balance) -> dict:
+    available = False
+    convert_currency(balance.amount, balance.currency, currency)
+    if balance.amount >= amount:
+        available = True
     return {
         "currency": currency,
         "required": amount,
         "available": available,
         "current_balance": balance,
-        "deficit": round(max(0, amount - balance), 2) if not available else 0
+        "deficit": (amount - balance) if not available else 0
     }

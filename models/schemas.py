@@ -31,3 +31,9 @@ class TradeVerdict(BaseModel):
     decision: str  # APPROVED / REJECTED
     reason: Optional[str] = None
     timestamp: datetime = datetime.now()
+
+
+class Balance(BaseModel):
+    """Капитал"""
+    amount: float  # в миллионах
+    currency: str

@@ -1,10 +1,11 @@
 import autogen
 from tools.liquidity import check_liquidity as check_liquidity_service
+from models.schemas import Balance
 
 
 # Функция-инструмент
-def check_liquidity(currency: str, amount: float) -> str:
-    result = check_liquidity_service(currency, amount)
+def check_liquidity(currency: str, amount: float, balance: Balance) -> str:
+    result = check_liquidity_service(currency, amount, balance)
     if result["available"]:
         return f"APPROVED: ликвидность доступна, баланс {result['current_balance']}M {currency}"
     else:
@@ -29,9 +30,10 @@ def create_treasury_agent(config_list):
                     "type": "object",
                     "properties": {
                         "currency": {"type": "string"},
-                        "amount": {"type": "number"}
+                        "amount": {"type": "number"},
+                        "balance": {"type": "Balance"}
                     },
-                    "required": ["currency", "amount"]
+                    "required": ["currency", "amount", "Balance"]
                 }
             }
         }

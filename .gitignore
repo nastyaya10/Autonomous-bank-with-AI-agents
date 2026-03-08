@@ -1,0 +1,32 @@
+# Виртуальное окружение
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Файлы Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Директории с данными (например, базы данных SQLite)
+*.db
+*.sqlite3
+
+# Файлы IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Файлы окружения
+.env
+*.log
+
+# Директория с зависимостями (если используете pipenv или poetry)
+Pipfile.lock
+poetry.lock

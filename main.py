@@ -2,11 +2,14 @@ import autogen
 from agents.trader import create_trader_agent, generate_proposal
 from agents.treasury import create_treasury_agent, check_liquidity
 from agents.risk import create_risk_agent, check_limits
-from models.schemas import TradeProposal, TradeVerdict
+from models.schemas import TradeProposal, TradeVerdict, Balance
 import json
 import re
 from dotenv import load_dotenv
 import os
+import tools.convert_currency
+from tools.convert_currency import convert_currency
+from tools.proposal_delta import evaluate_trade
 
 load_dotenv()
 
@@ -24,24 +27,14 @@ def extract_json(text):
     return None
 
 
-# LOOOOOOOOOOK!!!!!
 def extract_agent_response(chat_result, function_name=None):
     """
     Извлекает ответ агента из истории чата.
     Сначала ищет результат вызова инструмента (tool), затем текст ассистента.
     """
-    # Сначала ищем результат вызова инструмента
     for msg in reversed(chat_result.chat_history):
-        return msg["content"] # <-----
-        if msg["role"] == "tool" and msg.get("content"):
-            if function_name is None or msg.get("name") == function_name:
-                return msg["content"]
-    return None # <------
-    # Затем ищем текстовый ответ ассистента
-    #for msg in reversed(chat_result.chat_history):
-    #    if msg["role"] == "assistant" and msg.get("content"):
-    #        return msg["content"]
-    #return None
+        return msg["content"]
+    return None
 
 
 def parse_verdict(agent_name, proposal_id, verdict_text):
@@ -136,94 +129,115 @@ def main():
         description="Проверить лимиты на контрагента и влияние на капитал"
     )
 
-    user_request = input("\n💬 Введите запрос для трейдера (например, сгенерировать сделку на 10 млн рублей):\n> ")
-
-    print("\n" + "-" * 50)
-    print("ШАГ 1: Трейдер генерирует предложение")
-    print("-" * 50)
-
-    chat_result = user_proxy.initiate_chat(
-        trader,
-        message=user_request,
-        max_turns=2,
-        silent=False
+    balance = Balance(
+        amount=100.0,
+        currency="RUB"
     )
+    book = []
+    print("Введите количество сделок:")
+    cnt = int(input())
 
-    # Извлекаем результат выполнения функции generate_proposal
-    trader_response = extract_agent_response(chat_result, function_name="generate_proposal")
+    while cnt:
+        cnt -= 1
 
-    if trader_response is None:
-        print("❌ Не удалось получить ответ трейдера. История чата:")
-        for i, msg in enumerate(chat_result.chat_history):
-            print(f"{i}: {msg}")
-        raise ValueError("Трейдер не вернул ответ")
+        user_request = input("\n💬 Введите запрос для трейдера (например, сгенерировать сделку на 10 млн рублей):\n> ")
 
-    print(f"\n📊 Ответ трейдера (результат функции):\n{trader_response}")
+        print("\n" + "-" * 50)
+        print("ШАГ 1: Трейдер генерирует предложение")
+        print("-" * 50)
 
-    proposal_dict = extract_json(trader_response)
-    if not proposal_dict:
-        print("❌ Ошибка: Трейдер не сгенерировал валидный JSON")
-        print(trader_response)
-        return
-    proposal = TradeProposal(**proposal_dict)
-    print(f"\n✅ Предложение сгенерировано: {proposal.proposal_id}")
-    print(f"   {proposal.trade_type.value} | {proposal.notional}M {proposal.currency} | {proposal.counterparty}")
+        chat_result = user_proxy.initiate_chat(
+            trader,
+            message=user_request,
+            max_turns=2,
+            silent=False
+        )
 
-    print("\n" + "-" * 50)
-    print("ШАГ 2: Проверка Казначейством и Рисками")
-    print("-" * 50)
+        # Извлекаем результат выполнения функции generate_proposal
+        trader_response = extract_agent_response(chat_result, function_name="generate_proposal")
 
-    proposal_json = json.dumps(proposal.model_dump(), default=str)
+        if trader_response is None:
+            print("❌ Не удалось получить ответ трейдера. История чата:")
+            for i, msg in enumerate(chat_result.chat_history):
+                print(f"{i}: {msg}")
+            raise ValueError("Трейдер не вернул ответ")
 
-    # Казначейство
-    print("\n🏦 Запрос к Казначейству...")
-    chat_result = user_proxy.initiate_chat(
-        treasury,
-        message=proposal_json,
-        max_turns=2,
-        silent=False
-    )
-    treasury_response = extract_agent_response(chat_result, function_name="check_liquidity")
-    if treasury_response is None:
-        treasury_response = "REJECTED: нет ответа от казначейства"
-    print(f"📬 Ответ Казначейства: {treasury_response}")
+        print(f"\n📊 Ответ трейдера (результат функции):\n{trader_response}")
 
-    # Риски
-    print("\n⚠️ Запрос к Отделу рисков...")
-    chat_result = user_proxy.initiate_chat(
-        risk,
-        message=proposal_json,
-        max_turns=2,
-        silent=False
-    )
-    risk_response = extract_agent_response(chat_result, function_name="check_limits")
-    if risk_response is None:
-        risk_response = "REJECTED: нет ответа от отдела рисков"
-    print(f"📬 Ответ Рисков: {risk_response}")
+        proposal_dict = extract_json(trader_response)
+        if not proposal_dict:
+            print("❌ Ошибка: Трейдер не сгенерировал валидный JSON")
+            print(trader_response)
+            return
+        proposal = TradeProposal(**proposal_dict)
+        print(f"\n✅ Предложение сгенерировано: {proposal.proposal_id}")
+        print(f"   {proposal.trade_type.value} | {proposal.notional}M {proposal.currency} | {proposal.counterparty}")
 
-    treasury_verdict = parse_verdict("Treasury", proposal.proposal_id, treasury_response)
-    risk_verdict = parse_verdict("Risk", proposal.proposal_id, risk_response)
+        for old_proposal in book:
+            verdict = evaluate_trade(old_proposal, proposal.created_at)
+            if not verdict:
+                continue
+            nom = convert_currency(balance.amount, balance.currency, proposal.currency)
+            balance.amount = nom
+            balance.currency = proposal.currency
+            balance += verdict["pnl"]
 
-    print("\n" + "=" * 50)
-    print("ШАГ 3: ИТОГОВОЕ РЕШЕНИЕ")
-    print("=" * 50)
+        print("\n" + "-" * 50)
+        print("ШАГ 2: Проверка Казначейством и Рисками")
+        print("-" * 50)
 
-    if treasury_verdict.decision == "APPROVED" and risk_verdict.decision == "APPROVED":
-        print("\n✅✅✅ СДЕЛКА ОДОБРЕНА! ✅✅✅")
-        print(f"   ID сделки: {proposal.proposal_id}")
-        print(f"   Тип: {proposal.trade_type.value}")
-        print(f"   Номинал: {proposal.notional}M {proposal.currency}")
-        print(f"   Контрагент: {proposal.counterparty}")
-        print("\n   📝 Сделка будет исполнена в расчётной системе.")
-    else:
-        print("\n❌❌❌ СДЕЛКА ОТКЛОНЕНА ❌❌❌")
-        print(f"   ID предложения: {proposal.proposal_id}\n")
-        if treasury_verdict.decision == "REJECTED":
-            print(f"   🏦 Казначейство: {treasury_verdict.reason}")
-        if risk_verdict.decision == "REJECTED":
-            print(f"   ⚠️ Отдел рисков: {risk_verdict.reason}")
+        proposal_json = json.dumps(proposal.model_dump(), default=str)
 
-    print("\n" + "=" * 50)
+        # Казначейство
+        print("\n🏦 Запрос к Казначейству...")
+        chat_result = user_proxy.initiate_chat(
+            treasury,
+            message=proposal_json,
+            max_turns=2,
+            silent=False
+        )
+        treasury_response = extract_agent_response(chat_result, function_name="check_liquidity")
+        if treasury_response is None:
+            treasury_response = "REJECTED: нет ответа от казначейства"
+        print(f"📬 Ответ Казначейства: {treasury_response}")
+
+        # Риски
+        print("\n⚠️ Запрос к Отделу рисков...")
+        chat_result = user_proxy.initiate_chat(
+            risk,
+            message=proposal_json,
+            max_turns=2,
+            silent=False
+        )
+        risk_response = extract_agent_response(chat_result, function_name="check_limits")
+        if risk_response is None:
+            risk_response = "REJECTED: нет ответа от отдела рисков"
+        print(f"📬 Ответ Рисков: {risk_response}")
+
+        treasury_verdict = parse_verdict("Treasury", proposal.proposal_id, treasury_response)
+        risk_verdict = parse_verdict("Risk", proposal.proposal_id, risk_response)
+
+        print("\n" + "=" * 50)
+        print("ШАГ 3: ИТОГОВОЕ РЕШЕНИЕ")
+        print("=" * 50)
+
+        if treasury_verdict.decision == "APPROVED" and risk_verdict.decision == "APPROVED":
+            print("\n✅✅✅ СДЕЛКА ОДОБРЕНА! ✅✅✅")
+            print(f"   ID сделки: {proposal.proposal_id}")
+            print(f"   Тип: {proposal.trade_type.value}")
+            print(f"   Номинал: {proposal.notional}M {proposal.currency}")
+            print(f"   Контрагент: {proposal.counterparty}")
+            print("\n   📝 Сделка будет исполнена в расчётной системе.")
+            book.append(proposal)
+        else:
+            print("\n❌❌❌ СДЕЛКА ОТКЛОНЕНА ❌❌❌")
+            print(f"   ID предложения: {proposal.proposal_id}\n")
+            if treasury_verdict.decision == "REJECTED":
+                print(f"   🏦 Казначейство: {treasury_verdict.reason}")
+            if risk_verdict.decision == "REJECTED":
+                print(f"   ⚠️ Отдел рисков: {risk_verdict.reason}")
+
+        print("\n" + "=" * 50)
 
 
 if __name__ == "__main__":
