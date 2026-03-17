@@ -24,35 +24,29 @@ def safe_serializer(obj):
 # Функция генерации предложения
 # =======================
 def generate_proposal(
-        trade_type: str,
         notional: float,
         currency: str,
-        counterparty: str,
         tenor_years: int,
         deal_direction: str,
-        created_at: datetime
+        created_at: datetime,
+        interest: float
 ) -> str:
     """
     Генерирует предложение по сделке и возвращает валидный JSON.
     """
-
-    # Исправляем некорректные типы сделок
-    if trade_type == "swap":
-        trade_type = "interest_rate_swap"
 
     # Рассчитываем risk metric
     pv01 = calculate_pv01(notional, tenor_years)
 
     # Создаем объект модели сделки
     proposal = TradeProposal(
-        trade_type=TradeType(trade_type),
         notional=notional,
         currency=currency,
-        counterparty=counterparty,
         tenor_years=tenor_years,
         deal_direction=deal_direction,
         risk_metrics={"pv01": pv01, "duration": tenor_years},
-        created_at=created_at
+        created_at=created_at,
+        interest=interest
     )
 
     # Преобразуем в словарь
@@ -71,28 +65,28 @@ def generate_proposal(
 # =======================
 def create_trader_agent(config_list):
     system_message = """
-    Ты — трейдер на рынке деривативов.
+    Ты — генератор вкладов и кредитов для конкретного банка.
 
-    ТВОЯ ЗАДАЧА: Сгенерировать ровно одну сделку.
+    ТВОЯ ЗАДАЧА: Сгенерировать ровно одну сделку - ВКЛАД или КРЕДИТ.
     Ты ОБЯЗАН использовать функцию generate_proposal для формирования JSON.
     САМОЕ ВАЖНОЕ: Ты ОБЯЗАН вернуть корректный формат JSON.
     НЕ давай текстовых ответов, НЕ проси уточнений. Сразу вызывай функцию generate_proposal с правильными параметрами.
     Генерируй РАЗЛИЧНЫЕ сделки, анализируя историю диалога.
+    Кредиторы и вкладчики - физические лица - обычные люди, выбирай размер сделки СООТВЕТСТВЕННО.
     
     Про даты и сроки:
     - Срок кредита ставь 1 год, срок вклада 3 года.
-    - Дату начала и конца любой сделки ставь на начало квартала.
+    - Дату начала и конца любой сделки ставь на начало какого-то квартала.
     - Даты заключения любых сделок должны лежать в отрезке от 01.01.2010 до 01.01.2020.
     - Дата заключения каждой следующей сделки строго позже предыдущей.
 
     Параметры функции generate_proposal:
-    - trade_type: тип сделки ("interest_rate_swap", "bond", "fx_swap")
     - notional: номинал в миллионах (число)
     - currency: валюта ("USD", "EUR", "GBP")
-    - counterparty: контрагент (например, "Bank A")
     - tenor_years: срок в годах (целое число)
-    - deal_direction: направление ("BUY" или "SELL")
+    - deal_direction: направление ("deposit" или "loan")
     - created_at: дата заключения сделки (datetime)
+    - interest: процент по кредиту или вкладу (float)
 
     """
 
@@ -105,11 +99,6 @@ def create_trader_agent(config_list):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "trade_type": {
-                            "type": "string",
-                            "enum": ["interest_rate_swap", "bond", "fx_swap"],
-                            "description": "Тип сделки"
-                        },
                         "notional": {
                             "type": "number",
                             "description": "Номинал в миллионах"
@@ -119,26 +108,26 @@ def create_trader_agent(config_list):
                             "enum": ["USD", "EUR", "GBP"],
                             "description": "Валюта"
                         },
-                        "counterparty": {
-                            "type": "string",
-                            "description": "Контрагент"
-                        },
                         "tenor_years": {
                             "type": "integer",
                             "description": "Срок в годах"
                         },
                         "deal_direction": {
                             "type": "string",
-                            "enum": ["BUY", "SELL"],
+                            "enum": ["deposit", "loan"],
                             "description": "Направление сделки"
                         },
                         "created_at": {
                             "type": "datetime",
                             "description": "Дата заключения сделки"
+                        },
+                        "interest": {
+                            "type": "float",
+                            "description": "Процент по вкладу или кредиту"
                         }
                     },
-                    "required": ["trade_type", "notional", "currency", "counterparty", "tenor_years", "deal_direction",
-                                 "created_at"]
+                    "required": ["notional", "currency", "tenor_years", "deal_direction",
+                                 "created_at", "interest"]
                 }
             }
         }

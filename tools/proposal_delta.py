@@ -1,48 +1,67 @@
 from datetime import datetime
-from typing import Dict, Any
 import models.schemas
+import math
 
 
-def evaluate_trade(trade: models.schemas.TradeProposal, current_date: datetime) -> dict[str, str | float | int | Any] | None:
+def evaluate_trade(
+        trade: models.schemas.TradeProposal,
+        current_date: datetime,
+        include_interest: bool = True  # оставлен для совместимости
+) -> dict[str, float | str]:
     """
-    Оценивает прибыль/убыток сделки на текущую дату.
+    Возвращает:
+    {
+        "principal": остаток без процентов,
+        "total": остаток с процентами,
+        "currency": валюта
+    }
+
+    +  -> клиент должен банку (loan)
+    -  -> банк должен клиенту (deposit)
     """
 
-    # срок окончания сделки
-    maturity_date = trade.created_at.replace(
-        year=trade.created_at.year + trade.tenor_years
-    )
+    notional = trade.notional
+    annual_rate = trade.interest
 
-    # оставшееся время в годах
-    remaining_days = (maturity_date - current_date).days
-    remaining_years = max(remaining_days / 365, 0)
+    # квартальные параметры
+    periods_per_year = 4
+    total_periods = trade.tenor_years * periods_per_year
+    period_rate = annual_rate / periods_per_year
 
-    if remaining_days > 0:
-        return None
+    # сколько прошло времени
+    elapsed_days = (current_date - trade.created_at).days
+    elapsed_years = max(elapsed_days / 365, 0)
 
-    # базовые метрики
-    rate = trade.risk_metrics.get("rate", 0)
-    market_rate = trade.risk_metrics.get("market_rate", rate)
+    elapsed_periods = min(int(elapsed_years * periods_per_year), total_periods)
 
-    notional = trade.notional * 1_000_000
-
-    # простая модель PnL
-    rate_diff = market_rate - rate
-
-    if trade.deal_direction == "BUY":
-        pnl = rate_diff * notional * remaining_years
+    # аннуитетный платеж
+    if period_rate > 0:
+        payment = notional * (period_rate * (1 + period_rate) ** total_periods) / (
+                (1 + period_rate) ** total_periods - 1
+        )
     else:
-        pnl = -rate_diff * notional * remaining_years
+        payment = notional / total_periods
 
-    status = "MATURED" if remaining_days <= 0 else "ACTIVE"
+    remaining_principal = notional
+
+    # прогоняем уже прошедшие платежи
+    for _ in range(elapsed_periods):
+        interest_part = remaining_principal * period_rate
+        principal_part = payment - interest_part
+        remaining_principal -= principal_part
+
+    # остаток с учётом процентов (следующий период)
+    accrued_interest = remaining_principal * period_rate
+    total_value = remaining_principal + accrued_interest
+
+    if trade.deal_direction == "deposit":
+        principal_value = -remaining_principal
+        total_value = -total_value
+    else:
+        principal_value = remaining_principal
 
     return {
-        "proposal_id": trade.proposal_id,
-        "status": status,
-        "remaining_years": remaining_years,
-        "pnl": pnl,
-        "notional": notional,
-        "rate": rate,
-        "market_rate": market_rate,
+        "principal": principal_value,
+        "total": total_value,
         "currency": trade.currency
     }

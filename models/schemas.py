@@ -14,14 +14,13 @@ class TradeType(str, Enum):
 class TradeProposal(BaseModel):
     """Предложение сделки от трейдера"""
     proposal_id: str = str(uuid.uuid4())[:8]
-    trade_type: TradeType
     notional: float  # в миллионах
     currency: str
-    counterparty: str
     tenor_years: int
-    deal_direction: str  # BUY/SELL
+    deal_direction: str  # deposit/loan
     risk_metrics: Dict[str, float] = {}
     created_at: datetime
+    interest: float # процент
 
 
 class TradeVerdict(BaseModel):

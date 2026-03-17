@@ -132,18 +132,19 @@ def main():
     )
 
     balance = Balance(
-        amount=100.0,
+        amount=1000.0,
         currency="RUB"
     )
     book = []
     rejected_book = []
+    interest_rate_gap = 0
+    currency_gap = 0
+
     print("Введите количество сделок:")
     cnt = int(input())
 
     while cnt:
         cnt -= 1
-
-        # user_request = input("\n💬 Введите запрос для трейдера (например, сгенерировать сделку на 10 млн рублей):\n> ")
 
         print("\n" + "-" * 50)
         print("ШАГ 1: Трейдер генерирует предложение")
@@ -181,16 +182,7 @@ def main():
             return
         proposal = TradeProposal(**proposal_dict)
         print(f"\n✅ Предложение сгенерировано: {proposal.proposal_id}")
-        print(f"   {proposal.trade_type.value} | {proposal.notional}M {proposal.currency} | {proposal.counterparty}")
-
-        for old_proposal in book:
-            verdict = evaluate_trade(old_proposal, proposal.created_at)
-            if not verdict:
-                continue
-            nom = convert_currency(balance.amount, balance.currency, proposal.currency)
-            balance.amount = nom
-            balance.currency = proposal.currency
-            balance += verdict["pnl"]
+        print(f"   {proposal.deal_direction} | {proposal.notional}M {proposal.currency} | {proposal.interest}")
 
         print("\n" + "-" * 50)
         print("ШАГ 2: Проверка Казначейством и Рисками")
@@ -202,7 +194,7 @@ def main():
         print("\n🏦 Запрос к Казначейству...")
         chat_result = user_proxy.initiate_chat(
             treasury,
-            message=proposal_json,
+            message=f"""Сделка {proposal_json} типа JSON, капитал/баланс {balance} типа Balance""",
             max_turns=2,
             silent=False
         )
@@ -234,9 +226,9 @@ def main():
         if treasury_verdict.decision == "APPROVED" and risk_verdict.decision == "APPROVED":
             print("\n✅✅✅ СДЕЛКА ОДОБРЕНА! ✅✅✅")
             print(f"   ID сделки: {proposal.proposal_id}")
-            print(f"   Тип: {proposal.trade_type.value}")
+            print(f"   Тип: {proposal.deal_direction}")
             print(f"   Номинал: {proposal.notional}M {proposal.currency}")
-            print(f"   Контрагент: {proposal.counterparty}")
+            print(f"   Процент: {proposal.interest}")
             print("\n   📝 Сделка будет исполнена в расчётной системе.")
             book.append(proposal)
         else:
@@ -250,19 +242,17 @@ def main():
 
         for prop in book:
             delta = evaluate_trade(prop, proposal.created_at)
-            if not delta:
-                continue
-            num_delta = convert_currency(delta["pnl"], delta["currency"], balance.currency)
-            balance.amount += num_delta
+            num_delta = convert_currency(delta["principal"], delta["currency"], balance.currency)
+            balance.amount += convert_currency(delta["total"], delta["currency"], balance.currency)
+            currency_gap += num_delta
 
         print("\n" + "=" * 50)
 
         print(f"Капитал: {balance.amount}M {balance.currency}")
-        print("Процентный GAP:")
-        print("Валютный GAP:")
-        print("Портфель:")
-        for prop in book:
-            print(prop)
+        print("Процентный GAP: -")
+        print("Валютный GAP:", currency_gap)
+        print("Портфель:", book)
+        print("Пропущенные сделки:", rejected_book)
 
         print("\n" + "=" * 50)
 
