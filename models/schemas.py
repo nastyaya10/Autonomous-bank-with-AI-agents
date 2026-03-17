@@ -21,7 +21,7 @@ class TradeProposal(BaseModel):
     tenor_years: int
     deal_direction: str  # BUY/SELL
     risk_metrics: Dict[str, float] = {}
-    created_at: datetime = datetime.now()
+    created_at: datetime
 
 
 class TradeVerdict(BaseModel):

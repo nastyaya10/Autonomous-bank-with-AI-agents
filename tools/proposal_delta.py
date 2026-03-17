@@ -44,4 +44,5 @@ def evaluate_trade(trade: models.schemas.TradeProposal, current_date: datetime) 
         "notional": notional,
         "rate": rate,
         "market_rate": market_rate,
+        "currency": trade.currency
     }

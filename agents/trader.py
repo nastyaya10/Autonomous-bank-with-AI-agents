@@ -29,7 +29,8 @@ def generate_proposal(
         currency: str,
         counterparty: str,
         tenor_years: int,
-        deal_direction: str
+        deal_direction: str,
+        created_at: datetime
 ) -> str:
     """
     Генерирует предложение по сделке и возвращает валидный JSON.
@@ -51,7 +52,7 @@ def generate_proposal(
         tenor_years=tenor_years,
         deal_direction=deal_direction,
         risk_metrics={"pv01": pv01, "duration": tenor_years},
-        created_at=datetime.now()
+        created_at=created_at
     )
 
     # Преобразуем в словарь
@@ -72,10 +73,17 @@ def create_trader_agent(config_list):
     system_message = """
     Ты — трейдер на рынке деривативов.
 
-    ТВОЯ ЗАДАЧА: На основе запроса пользователя сгенерировать предложение по сделке.
+    ТВОЯ ЗАДАЧА: Сгенерировать ровно одну сделку.
     Ты ОБЯЗАН использовать функцию generate_proposal для формирования JSON.
     Ты ОБЯЗАН вернуть корректный формат JSON.
     НЕ давай текстовых ответов, НЕ проси уточнений. Сразу вызывай функцию generate_proposal с правильными параметрами.
+    
+    Срок кредита ставь 1 год, срок вклада 3 года.
+    Дату начала и конца любой сделки ставь на начало квартала.
+    Даты заключения любых сделок должны лежать в отрезке от 01.01.2010 до 01.01.2020.
+    Каждая следующая сделка должна быть заключена СТРОГО после предыдущей, уже в другом квартале.
+    
+    Генерируй РАЗЛИЧНЫЕ сделки, анализируя историю диалога.
 
     Параметры функции:
     - trade_type: тип сделки ("interest_rate_swap", "bond", "fx_swap")
@@ -84,6 +92,7 @@ def create_trader_agent(config_list):
     - counterparty: контрагент (например, "Bank A")
     - tenor_years: срок в годах (целое число)
     - deal_direction: направление ("BUY" или "SELL")
+    - created_at: дата заключения сделки (datetime)
 
     """
 
@@ -122,9 +131,14 @@ def create_trader_agent(config_list):
                             "type": "string",
                             "enum": ["BUY", "SELL"],
                             "description": "Направление сделки"
+                        },
+                        "created_at": {
+                            "type": "datetime",
+                            "description": "Дата заключения сделки"
                         }
                     },
-                    "required": ["trade_type", "notional", "currency", "counterparty", "tenor_years", "deal_direction"]
+                    "required": ["trade_type", "notional", "currency", "counterparty", "tenor_years", "deal_direction",
+                                 "created_at"]
                 }
             }
         }

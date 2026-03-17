@@ -1,3 +1,5 @@
+from time import process_time
+
 import autogen
 from agents.trader import create_trader_agent, generate_proposal
 from agents.treasury import create_treasury_agent, check_liquidity
@@ -140,7 +142,7 @@ def main():
     while cnt:
         cnt -= 1
 
-        user_request = input("\n💬 Введите запрос для трейдера (например, сгенерировать сделку на 10 млн рублей):\n> ")
+        # user_request = input("\n💬 Введите запрос для трейдера (например, сгенерировать сделку на 10 млн рублей):\n> ")
 
         print("\n" + "-" * 50)
         print("ШАГ 1: Трейдер генерирует предложение")
@@ -148,7 +150,7 @@ def main():
 
         chat_result = user_proxy.initiate_chat(
             trader,
-            message=user_request,
+            message="",
             max_turns=2,
             silent=False
         )
@@ -237,6 +239,19 @@ def main():
             if risk_verdict.decision == "REJECTED":
                 print(f"   ⚠️ Отдел рисков: {risk_verdict.reason}")
 
+        for prop in book:
+            delta = evaluate_trade(prop, proposal.created_at)
+            if not delta:
+                continue
+            num_delta = convert_currency(delta["pnl"], delta["currency"], balance.currency)
+            balance.amount += num_delta
+
+        print(f"Капитал: {balance.amount}M {balance.currency}")
+        print("Процентный GAP:")
+        print("Валютный GAP:")
+        print("Портфель:")
+        for prop in book:
+            print(prop)
         print("\n" + "=" * 50)
 
 
