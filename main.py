@@ -136,6 +136,7 @@ def main():
         currency="RUB"
     )
     book = []
+    rejected_book = []
     print("Введите количество сделок:")
     cnt = int(input())
 
@@ -150,7 +151,14 @@ def main():
 
         chat_result = user_proxy.initiate_chat(
             trader,
-            message="",
+            message=f"""
+            Вот уже сгенерированные сделки:
+            {book + rejected_book}
+            
+            Сгенерируй НОВУЮ сделку, которая:
+            - отличается от всех выше
+            - имеет created_at строго больше всех предыдущих
+            """,
             max_turns=2,
             silent=False
         )
@@ -238,6 +246,7 @@ def main():
                 print(f"   🏦 Казначейство: {treasury_verdict.reason}")
             if risk_verdict.decision == "REJECTED":
                 print(f"   ⚠️ Отдел рисков: {risk_verdict.reason}")
+            rejected_book.append(proposal)
 
         for prop in book:
             delta = evaluate_trade(prop, proposal.created_at)
@@ -246,12 +255,15 @@ def main():
             num_delta = convert_currency(delta["pnl"], delta["currency"], balance.currency)
             balance.amount += num_delta
 
+        print("\n" + "=" * 50)
+
         print(f"Капитал: {balance.amount}M {balance.currency}")
         print("Процентный GAP:")
         print("Валютный GAP:")
         print("Портфель:")
         for prop in book:
             print(prop)
+
         print("\n" + "=" * 50)
 
 
