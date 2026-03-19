@@ -133,12 +133,12 @@ def main():
 
     balance = Balance(
         amount=1000.0,
-        currency="RUB"
+        currency="RUB",
+        first_amount=1000.0
     )
     book = []
     rejected_book = []
-    interest_rate_gap = 0
-    currency_gap = 0
+    clients_history = dict()
 
     print("Введите количество сделок:")
     cnt = int(input())
@@ -231,6 +231,9 @@ def main():
             print(f"   Процент: {proposal.interest}")
             print("\n   📝 Сделка будет исполнена в расчётной системе.")
             book.append(proposal)
+            if proposal.client not in clients_history:
+                clients_history[proposal.client] = []
+            clients_history[proposal.client].append(proposal)
         else:
             print("\n❌❌❌ СДЕЛКА ОТКЛОНЕНА ❌❌❌")
             print(f"   ID предложения: {proposal.proposal_id}\n")
@@ -240,6 +243,8 @@ def main():
                 print(f"   ⚠️ Отдел рисков: {risk_verdict.reason}")
             rejected_book.append(proposal)
 
+        currency_gap = 0
+        balance.amount = balance.first_amount
         for prop in book:
             delta = evaluate_trade(prop, proposal.created_at)
             num_delta = convert_currency(delta["principal"], delta["currency"], balance.currency)
@@ -250,7 +255,7 @@ def main():
 
         print(f"Капитал: {balance.amount}M {balance.currency}")
         print("Процентный GAP: -")
-        print("Валютный GAP:", currency_gap)
+        print(f"Валютный GAP: {currency_gap}M {balance.currency}")
         print("Портфель:", book)
         print("Пропущенные сделки:", rejected_book)
 

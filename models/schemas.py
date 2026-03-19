@@ -14,6 +14,7 @@ class TradeType(str, Enum):
 class TradeProposal(BaseModel):
     """Предложение сделки от трейдера"""
     proposal_id: str = str(uuid.uuid4())[:8]
+    client: str
     notional: float  # в миллионах
     currency: str
     tenor_years: int
@@ -36,3 +37,4 @@ class Balance(BaseModel):
     """Капитал"""
     amount: float  # в миллионах
     currency: str
+    first_amount: float

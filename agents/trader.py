@@ -24,6 +24,7 @@ def safe_serializer(obj):
 # Функция генерации предложения
 # =======================
 def generate_proposal(
+        client: str,
         notional: float,
         currency: str,
         tenor_years: int,
@@ -40,6 +41,7 @@ def generate_proposal(
 
     # Создаем объект модели сделки
     proposal = TradeProposal(
+        client=client,
         notional=notional,
         currency=currency,
         tenor_years=tenor_years,
@@ -73,6 +75,7 @@ def create_trader_agent(config_list):
     НЕ давай текстовых ответов, НЕ проси уточнений. Сразу вызывай функцию generate_proposal с правильными параметрами.
     Генерируй РАЗЛИЧНЫЕ сделки, анализируя историю диалога.
     Кредиторы и вкладчики - физические лица - обычные люди, выбирай размер сделки СООТВЕТСТВЕННО.
+    Работай ТОЛЬКО в валюте RUB.
     
     Про даты и сроки:
     - Срок кредита ставь 1 год, срок вклада 3 года.
@@ -81,8 +84,9 @@ def create_trader_agent(config_list):
     - Дата заключения каждой следующей сделки строго позже предыдущей.
 
     Параметры функции generate_proposal:
+    - client: id клиента (строка)
     - notional: номинал в миллионах (число)
-    - currency: валюта ("USD", "EUR", "GBP")
+    - currency: валюта ("RUB")
     - tenor_years: срок в годах (целое число)
     - deal_direction: направление ("deposit" или "loan")
     - created_at: дата заключения сделки (datetime)
@@ -99,6 +103,10 @@ def create_trader_agent(config_list):
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "client": {
+                            "type": "string",
+                            "description": "id клиента"
+                        },
                         "notional": {
                             "type": "number",
                             "description": "Номинал в миллионах"
@@ -126,7 +134,7 @@ def create_trader_agent(config_list):
                             "description": "Процент по вкладу или кредиту"
                         }
                     },
-                    "required": ["notional", "currency", "tenor_years", "deal_direction",
+                    "required": ["client", "notional", "currency", "tenor_years", "deal_direction",
                                  "created_at", "interest"]
                 }
             }
