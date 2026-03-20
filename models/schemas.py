@@ -19,7 +19,7 @@ class TradeProposal(BaseModel):
     currency: str
     tenor_years: int
     deal_direction: str  # deposit/loan
-    risk_metrics: Dict[str, float] = {}
+    pd_annual: float
     created_at: datetime
     interest: float # процент
 

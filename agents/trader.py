@@ -29,6 +29,7 @@ def generate_proposal(
         currency: str,
         tenor_years: int,
         deal_direction: str,
+        pd_annual: float,
         created_at: datetime,
         interest: float
 ) -> str:
@@ -46,7 +47,7 @@ def generate_proposal(
         currency=currency,
         tenor_years=tenor_years,
         deal_direction=deal_direction,
-        risk_metrics={"pv01": pv01, "duration": tenor_years},
+        pd_annual=pd_annual,
         created_at=created_at,
         interest=interest
     )
@@ -56,7 +57,7 @@ def generate_proposal(
 
     # Явно преобразуем числовые поля, чтобы не было Decimal
     proposal_dict['notional'] = float(proposal_dict['notional'])
-    proposal_dict['risk_metrics']['duration'] = int(proposal_dict['risk_metrics']['duration'])
+    proposal_dict['pd_annual'] = float(proposal_dict['pd_annual'])
 
     # Сериализуем в валидный JSON
     return json.dumps(proposal_dict, default=safe_serializer)
@@ -89,6 +90,7 @@ def create_trader_agent(config_list):
     - currency: валюта ("RUB")
     - tenor_years: срок в годах (целое число)
     - deal_direction: направление ("deposit" или "loan")
+    - pd_annual: годовой PD клиента (float)
     - created_at: дата заключения сделки (datetime)
     - interest: процент по кредиту или вкладу (float)
 
@@ -124,6 +126,10 @@ def create_trader_agent(config_list):
                             "type": "string",
                             "enum": ["deposit", "loan"],
                             "description": "Направление сделки"
+                        },
+                        "pd_annual": {
+                            "type": "float",
+                            "description": "Годовой PD клиента"
                         },
                         "created_at": {
                             "type": "datetime",

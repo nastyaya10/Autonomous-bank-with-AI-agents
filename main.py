@@ -3,7 +3,7 @@ from time import process_time
 import autogen
 from agents.trader import create_trader_agent, generate_proposal
 from agents.treasury import create_treasury_agent, check_liquidity
-from agents.risk import create_risk_agent, check_limits
+from agents.risk import create_client_risk_agent, calculate_client_risk
 from models.schemas import TradeProposal, TradeVerdict, Balance
 import json
 import re
@@ -98,7 +98,7 @@ def main():
     print("🔄 Создание агентов...")
     trader = create_trader_agent(config_list)
     treasury = create_treasury_agent(config_list)
-    risk = create_risk_agent(config_list)
+    risk = create_client_risk_agent(config_list)
 
     user_proxy = autogen.UserProxyAgent(
         name="Orchestrator",
@@ -124,11 +124,11 @@ def main():
         description="Проверить наличие ликвидности"
     )
     autogen.register_function(
-        check_limits,
+        calculate_client_risk,
         caller=risk,
         executor=user_proxy,
-        name="check_limits",
-        description="Проверить лимиты на контрагента и влияние на капитал"
+        name="calculate_client_risk",
+        description="Посчитать риск конкретного клиента"
     )
 
     balance = Balance(
@@ -181,6 +181,8 @@ def main():
             print(trader_response)
             return
         proposal = TradeProposal(**proposal_dict)
+        if proposal.client not in clients_history:
+            clients_history[proposal.client] = []
         print(f"\n✅ Предложение сгенерировано: {proposal.proposal_id}")
         print(f"   {proposal.deal_direction} | {proposal.notional}M {proposal.currency} | {proposal.interest}")
 
@@ -207,11 +209,11 @@ def main():
         print("\n⚠️ Запрос к Отделу рисков...")
         chat_result = user_proxy.initiate_chat(
             risk,
-            message=proposal_json,
+            message=f"""Список старых сделок клиента {proposal.client}: {clients_history[proposal.client]}""",
             max_turns=2,
             silent=False
         )
-        risk_response = extract_agent_response(chat_result, function_name="check_limits")
+        risk_response = extract_agent_response(chat_result, function_name="calculate_client_risk")
         if risk_response is None:
             risk_response = "REJECTED: нет ответа от отдела рисков"
         print(f"📬 Ответ Рисков: {risk_response}")
@@ -231,8 +233,6 @@ def main():
             print(f"   Процент: {proposal.interest}")
             print("\n   📝 Сделка будет исполнена в расчётной системе.")
             book.append(proposal)
-            if proposal.client not in clients_history:
-                clients_history[proposal.client] = []
             clients_history[proposal.client].append(proposal)
         else:
             print("\n❌❌❌ СДЕЛКА ОТКЛОНЕНА ❌❌❌")
