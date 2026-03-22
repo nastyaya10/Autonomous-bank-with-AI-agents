@@ -4,14 +4,7 @@ from enum import Enum
 import uuid
 from datetime import datetime
 
-
-class TradeType(str, Enum):
-    IRS = "interest_rate_swap"
-    BOND = "bond"
-    FX_SWAP = "fx_swap"
-
-
-class TradeProposal(BaseModel):
+class Deal(BaseModel):
     """Предложение сделки от трейдера"""
     proposal_id: str = str(uuid.uuid4())[:8]
     client: str
@@ -24,7 +17,7 @@ class TradeProposal(BaseModel):
     interest: float # процент
 
 
-class TradeVerdict(BaseModel):
+class DealVerdict(BaseModel):
     """Решение контролирующего агента"""
     agent: str
     proposal_id: str

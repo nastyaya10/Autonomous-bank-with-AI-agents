@@ -1,15 +1,13 @@
-from time import process_time
-
 import autogen
-from agents.trader import create_trader_agent, generate_proposal
+from agents.deal_generator import create_deal_generator_agent, generate_proposal
 from agents.treasury import create_treasury_agent, check_liquidity
-from agents.risk import create_client_risk_agent, calculate_client_risk
-from models.schemas import TradeProposal, TradeVerdict, Balance
+from agents.deposit_part.deposit_risk import calculate_deposit_risk, create_deposit_risk_agent
+from agents.loan_part.loan_risk import calculate_loan_risk, create_loan_risk_agent
+from models.schemas import Deal, DealVerdict, Balance
 import json
 import re
 from dotenv import load_dotenv
 import os
-import tools.convert_currency
 from tools.convert_currency import convert_currency
 from tools.proposal_delta import evaluate_trade
 
@@ -42,14 +40,14 @@ def extract_agent_response(chat_result, function_name=None):
 def parse_verdict(agent_name, proposal_id, verdict_text):
     """Парсит ответ агента (APPROVED/REJECTED)"""
     if not verdict_text:
-        return TradeVerdict(
+        return DealVerdict(
             agent=agent_name,
             proposal_id=proposal_id,
             decision="REJECTED",
             reason="Нет ответа от агента"
         )
     if "APPROVED" in verdict_text.upper():
-        return TradeVerdict(
+        return DealVerdict(
             agent=agent_name,
             proposal_id=proposal_id,
             decision="APPROVED"
@@ -62,7 +60,7 @@ def parse_verdict(agent_name, proposal_id, verdict_text):
             reason = verdict_text
         else:
             reason = "Причина не указана"
-        return TradeVerdict(
+        return DealVerdict(
             agent=agent_name,
             proposal_id=proposal_id,
             decision="REJECTED",
@@ -96,9 +94,10 @@ def main():
     ]
 
     print("🔄 Создание агентов...")
-    trader = create_trader_agent(config_list)
+    deal_generator = create_deal_generator_agent(config_list)
     treasury = create_treasury_agent(config_list)
-    risk = create_client_risk_agent(config_list)
+    loan_risk = create_loan_risk_agent(config_list)
+    deposit_risk = create_deposit_risk_agent(config_list)
 
     user_proxy = autogen.UserProxyAgent(
         name="Orchestrator",
@@ -111,7 +110,7 @@ def main():
     # Регистрируем функции
     autogen.register_function(
         generate_proposal,
-        caller=trader,
+        caller=deal_generator,
         executor=user_proxy,
         name="generate_proposal",
         description="Сгенерировать предложение по сделке и вернуть JSON"
@@ -124,11 +123,18 @@ def main():
         description="Проверить наличие ликвидности"
     )
     autogen.register_function(
-        calculate_client_risk,
-        caller=risk,
+        calculate_loan_risk,
+        caller=loan_risk,
         executor=user_proxy,
-        name="calculate_client_risk",
-        description="Посчитать риск конкретного клиента"
+        name="calculate_loan_risk",
+        description="Посчитать риск для конкретного клиента"
+    )
+    autogen.register_function(
+        calculate_deposit_risk,
+        caller=deposit_risk,
+        executor=user_proxy,
+        name="calculate_deposit_risk",
+        description="Посчитать риск для конкретного клиента"
     )
 
     balance = Balance(
@@ -147,11 +153,11 @@ def main():
         cnt -= 1
 
         print("\n" + "-" * 50)
-        print("ШАГ 1: Трейдер генерирует предложение")
+        print("ШАГ 1: Генератор сделок генерирует предложение")
         print("-" * 50)
 
         chat_result = user_proxy.initiate_chat(
-            trader,
+            deal_generator,
             message=f"""
             Вот уже сгенерированные сделки:
             {book + rejected_book}
@@ -165,22 +171,22 @@ def main():
         )
 
         # Извлекаем результат выполнения функции generate_proposal
-        trader_response = extract_agent_response(chat_result, function_name="generate_proposal")
+        deal_generator_response = extract_agent_response(chat_result, function_name="generate_proposal")
 
-        if trader_response is None:
-            print("❌ Не удалось получить ответ трейдера. История чата:")
+        if deal_generator_response is None:
+            print("❌ Не удалось получить ответ генератора. История чата:")
             for i, msg in enumerate(chat_result.chat_history):
                 print(f"{i}: {msg}")
-            raise ValueError("Трейдер не вернул ответ")
+            raise ValueError("Генератор сделок не вернул ответ")
 
-        print(f"\n📊 Ответ трейдера (результат функции):\n{trader_response}")
+        print(f"\n📊 Ответ генератора (результат функции):\n{deal_generator_response}")
 
-        proposal_dict = extract_json(trader_response)
+        proposal_dict = extract_json(deal_generator_response)
         if not proposal_dict:
-            print("❌ Ошибка: Трейдер не сгенерировал валидный JSON")
-            print(trader_response)
+            print("❌ Ошибка: Генератор сделок не сгенерировал валидный JSON")
+            print(deal_generator_response)
             return
-        proposal = TradeProposal(**proposal_dict)
+        proposal = Deal(**proposal_dict)
         if proposal.client not in clients_history:
             clients_history[proposal.client] = []
         print(f"\n✅ Предложение сгенерировано: {proposal.proposal_id}")
@@ -207,16 +213,28 @@ def main():
 
         # Риски
         print("\n⚠️ Запрос к Отделу рисков...")
-        chat_result = user_proxy.initiate_chat(
-            risk,
-            message=f"""Список старых сделок клиента {proposal.client}: {clients_history[proposal.client]}""",
-            max_turns=2,
-            silent=False
-        )
-        risk_response = extract_agent_response(chat_result, function_name="calculate_client_risk")
-        if risk_response is None:
-            risk_response = "REJECTED: нет ответа от отдела рисков"
-        print(f"📬 Ответ Рисков: {risk_response}")
+        if proposal.deal_direction == "loan":  # выдающий отдел
+            chat_result = user_proxy.initiate_chat(
+                loan_risk,
+                message=f"""Список старых сделок клиента {proposal.client}: {clients_history[proposal.client]}""",
+                max_turns=2,
+                silent=False
+            )
+            risk_response = extract_agent_response(chat_result, function_name="calculate_loan_risk")
+            if risk_response is None:
+                risk_response = "REJECTED: нет ответа от отдела рисков"
+            print(f"📬 Ответ Рисков: {risk_response}")
+        else:  # принимающий отдел
+            chat_result = user_proxy.initiate_chat(
+                deposit_risk,
+                message=f"""Список старых сделок клиента {proposal.client}: {clients_history[proposal.client]}""",
+                max_turns=2,
+                silent=False
+            )
+            risk_response = extract_agent_response(chat_result, function_name="calculate_deposit_risk")
+            if risk_response is None:
+                risk_response = "REJECTED: нет ответа от отдела рисков"
+            print(f"📬 Ответ Рисков: {risk_response}")
 
         treasury_verdict = parse_verdict("Treasury", proposal.proposal_id, treasury_response)
         risk_verdict = parse_verdict("Risk", proposal.proposal_id, risk_response)

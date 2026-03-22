@@ -4,9 +4,8 @@ import math
 
 
 def evaluate_trade(
-        trade: models.schemas.TradeProposal,
+        trade: models.schemas.Deal,
         current_date: datetime,
-        include_interest: bool = True  # оставлен для совместимости
 ) -> dict[str, float | str]:
     """
     Возвращает:
