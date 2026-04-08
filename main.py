@@ -1,284 +1,62 @@
-import autogen
-from agents.deal_generator import create_deal_generator_agent, generate_proposal
-from agents.treasury import create_treasury_agent, check_liquidity
-from agents.deposit_part.deposit_risk import calculate_deposit_risk, create_deposit_risk_agent
-from agents.loan_part.loan_risk import calculate_loan_risk, create_loan_risk_agent
-from models.schemas import Deal, DealVerdict, Balance
-import json
-import re
-from dotenv import load_dotenv
 import os
-from tools.convert_currency import convert_currency
-from tools.proposal_delta import evaluate_trade
+import random
+from models import Portfolio, MessageBus
+from agents import (
+    LendingDepartment, CreditClient,
+    DepositDepartment, DepositClient,
+    Treasury, RiskAgent
+)
 
+from dotenv import load_dotenv
 load_dotenv()
 
-
-def extract_json(text):
-    """Извлекает JSON из текста"""
-    if not isinstance(text, str):
-        return None
-    json_match = re.search(r'\{.*\}', text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group())
-        except:
-            return None
-    return None
+config_list = [
+    {
+        'model': 'gpt-4o-mini',
+        'api_key': os.getenv('AIPIPE_TOKEN'),
+        'base_url': os.getenv('OPENAI_BASE_URL', 'https://aipipe.org/openai/v1'),
+    }
+]
 
 
-def extract_agent_response(chat_result, function_name=None):
-    """
-    Извлекает ответ агента из истории чата.
-    Сначала ищет результат вызова инструмента (tool), затем текст ассистента.
-    """
-    for msg in reversed(chat_result.chat_history):
-        return msg["content"]
-    return None
+def run_simulation(num_deals: int = 10):
+    portfolio = Portfolio()
+    bus = MessageBus()
 
+    lending = LendingDepartment("LendingDept", portfolio, config_list)
+    credit_client = CreditClient("CreditClient", config_list)
+    deposit_dept = DepositDepartment("DepositDept", portfolio, "Treasury", "RiskAgent", config_list)
+    deposit_client = DepositClient("DepositClient", config_list)
+    treasury = Treasury("Treasury", portfolio, "RiskAgent")
+    risk = RiskAgent("RiskAgent", portfolio)
 
-def parse_verdict(agent_name, proposal_id, verdict_text):
-    """Парсит ответ агента (APPROVED/REJECTED)"""
-    if not verdict_text:
-        return DealVerdict(
-            agent=agent_name,
-            proposal_id=proposal_id,
-            decision="REJECTED",
-            reason="Нет ответа от агента"
-        )
-    if "APPROVED" in verdict_text.upper():
-        return DealVerdict(
-            agent=agent_name,
-            proposal_id=proposal_id,
-            decision="APPROVED"
-        )
-    else:
-        reason = verdict_text
-        if "REJECTED:" in verdict_text:
-            reason = verdict_text.split("REJECTED:")[1].strip()
-        elif "отклонен" in verdict_text.lower():
-            reason = verdict_text
+    for agent in [lending, credit_client, deposit_dept, deposit_client, treasury, risk]:
+        bus.register(agent)
+
+    for i in range(num_deals):
+        print(f"\n--- СДЕЛКА {i + 1} ---")
+        if random.choice(["loan", "deposit"]) == "loan":
+            amount = random.randint(10000, 500000)
+            term = random.choice([3, 6, 12, 24])
+            print(f"Инициируем кредит: сумма {amount} руб., срок {term} мес.")
+            lending.propose_loan("CreditClient", amount, term)
         else:
-            reason = "Причина не указана"
-        return DealVerdict(
-            agent=agent_name,
-            proposal_id=proposal_id,
-            decision="REJECTED",
-            reason=reason
-        )
+            amount = random.randint(5000, 300000)
+            term = random.choice([1, 3, 6, 12])
+            print(f"Инициируем депозит: сумма {amount} руб., срок {term} мес.")
+            deposit_dept.propose_deposit("DepositClient", amount, term)
 
+        treasury.send("RiskAgent", {"type": "gap_report", "gap": portfolio.gap_by_term()})
 
-def is_termination_msg(msg):
-    """Определяет, когда диалог можно завершить (при получении валидного JSON с proposal_id)"""
-    if isinstance(msg.get("content"), str):
-        try:
-            data = json.loads(msg["content"])
-            if "proposal_id" in data:
-                return True
-        except:
-            pass
-    return False
-
-
-def main():
-    print("\n" + "=" * 50)
-    print("🏦 БАНКОВСКАЯ МУЛЬТИАГЕНТНАЯ СИСТЕМА")
-    print("=" * 50 + "\n")
-
-    config_list = [
-        {
-            'model': 'gpt-4o-mini',
-            'api_key': os.getenv('AIPIPE_TOKEN'),
-            'base_url': os.getenv('OPENAI_BASE_URL', 'https://aipipe.org/openai/v1'),
-        }
-    ]
-
-    print("🔄 Создание агентов...")
-    deal_generator = create_deal_generator_agent(config_list)
-    treasury = create_treasury_agent(config_list)
-    loan_risk = create_loan_risk_agent(config_list)
-    deposit_risk = create_deposit_risk_agent(config_list)
-
-    user_proxy = autogen.UserProxyAgent(
-        name="Orchestrator",
-        human_input_mode="NEVER",
-        code_execution_config=False,
-        max_consecutive_auto_reply=10,
-        is_termination_msg=is_termination_msg  # <-- добавляем условие завершения
-    )
-
-    # Регистрируем функции
-    autogen.register_function(
-        generate_proposal,
-        caller=deal_generator,
-        executor=user_proxy,
-        name="generate_proposal",
-        description="Сгенерировать предложение по сделке и вернуть JSON"
-    )
-    autogen.register_function(
-        check_liquidity,
-        caller=treasury,
-        executor=user_proxy,
-        name="check_liquidity",
-        description="Проверить наличие ликвидности"
-    )
-    autogen.register_function(
-        calculate_loan_risk,
-        caller=loan_risk,
-        executor=user_proxy,
-        name="calculate_loan_risk",
-        description="Посчитать риск для конкретного клиента"
-    )
-    autogen.register_function(
-        calculate_deposit_risk,
-        caller=deposit_risk,
-        executor=user_proxy,
-        name="calculate_deposit_risk",
-        description="Посчитать риск для конкретного клиента"
-    )
-
-    balance = Balance(
-        amount=1000.0,
-        currency="RUB",
-        first_amount=1000.0
-    )
-    book = []
-    rejected_book = []
-    clients_history = dict()
-
-    print("Введите количество сделок:")
-    cnt = int(input())
-
-    while cnt:
-        cnt -= 1
-
-        print("\n" + "-" * 50)
-        print("ШАГ 1: Генератор сделок генерирует предложение")
-        print("-" * 50)
-
-        chat_result = user_proxy.initiate_chat(
-            deal_generator,
-            message=f"""
-            Вот уже сгенерированные сделки:
-            {book + rejected_book}
-            
-            Сгенерируй НОВУЮ сделку, которая:
-            - отличается от всех выше
-            - имеет created_at строго больше всех предыдущих
-            """,
-            max_turns=2,
-            silent=False
-        )
-
-        # Извлекаем результат выполнения функции generate_proposal
-        deal_generator_response = extract_agent_response(chat_result, function_name="generate_proposal")
-
-        if deal_generator_response is None:
-            print("❌ Не удалось получить ответ генератора. История чата:")
-            for i, msg in enumerate(chat_result.chat_history):
-                print(f"{i}: {msg}")
-            raise ValueError("Генератор сделок не вернул ответ")
-
-        print(f"\n📊 Ответ генератора (результат функции):\n{deal_generator_response}")
-
-        proposal_dict = extract_json(deal_generator_response)
-        if not proposal_dict:
-            print("❌ Ошибка: Генератор сделок не сгенерировал валидный JSON")
-            print(deal_generator_response)
-            return
-        proposal = Deal(**proposal_dict)
-        if proposal.client not in clients_history:
-            clients_history[proposal.client] = []
-        print(f"\n✅ Предложение сгенерировано: {proposal.proposal_id}")
-        print(f"   {proposal.deal_direction} | {proposal.notional}M {proposal.currency} | {proposal.interest}")
-
-        print("\n" + "-" * 50)
-        print("ШАГ 2: Проверка Казначейством и Рисками")
-        print("-" * 50)
-
-        proposal_json = json.dumps(proposal.model_dump(), default=str)
-
-        # Казначейство
-        print("\n🏦 Запрос к Казначейству...")
-        chat_result = user_proxy.initiate_chat(
-            treasury,
-            message=f"""Сделка {proposal_json} типа JSON, капитал/баланс {balance} типа Balance""",
-            max_turns=2,
-            silent=False
-        )
-        treasury_response = extract_agent_response(chat_result, function_name="check_liquidity")
-        if treasury_response is None:
-            treasury_response = "REJECTED: нет ответа от казначейства"
-        print(f"📬 Ответ Казначейства: {treasury_response}")
-
-        # Риски
-        print("\n⚠️ Запрос к Отделу рисков...")
-        if proposal.deal_direction == "loan":  # выдающий отдел
-            chat_result = user_proxy.initiate_chat(
-                loan_risk,
-                message=f"""Список старых сделок клиента {proposal.client}: {clients_history[proposal.client]}""",
-                max_turns=2,
-                silent=False
-            )
-            risk_response = extract_agent_response(chat_result, function_name="calculate_loan_risk")
-            if risk_response is None:
-                risk_response = "REJECTED: нет ответа от отдела рисков"
-            print(f"📬 Ответ Рисков: {risk_response}")
-        else:  # принимающий отдел
-            chat_result = user_proxy.initiate_chat(
-                deposit_risk,
-                message=f"""Список старых сделок клиента {proposal.client}: {clients_history[proposal.client]}""",
-                max_turns=2,
-                silent=False
-            )
-            risk_response = extract_agent_response(chat_result, function_name="calculate_deposit_risk")
-            if risk_response is None:
-                risk_response = "REJECTED: нет ответа от отдела рисков"
-            print(f"📬 Ответ Рисков: {risk_response}")
-
-        treasury_verdict = parse_verdict("Treasury", proposal.proposal_id, treasury_response)
-        risk_verdict = parse_verdict("Risk", proposal.proposal_id, risk_response)
-
-        print("\n" + "=" * 50)
-        print("ШАГ 3: ИТОГОВОЕ РЕШЕНИЕ")
-        print("=" * 50)
-
-        if treasury_verdict.decision == "APPROVED" and risk_verdict.decision == "APPROVED":
-            print("\n✅✅✅ СДЕЛКА ОДОБРЕНА! ✅✅✅")
-            print(f"   ID сделки: {proposal.proposal_id}")
-            print(f"   Тип: {proposal.deal_direction}")
-            print(f"   Номинал: {proposal.notional}M {proposal.currency}")
-            print(f"   Процент: {proposal.interest}")
-            print("\n   📝 Сделка будет исполнена в расчётной системе.")
-            book.append(proposal)
-            clients_history[proposal.client].append(proposal)
-        else:
-            print("\n❌❌❌ СДЕЛКА ОТКЛОНЕНА ❌❌❌")
-            print(f"   ID предложения: {proposal.proposal_id}\n")
-            if treasury_verdict.decision == "REJECTED":
-                print(f"   🏦 Казначейство: {treasury_verdict.reason}")
-            if risk_verdict.decision == "REJECTED":
-                print(f"   ⚠️ Отдел рисков: {risk_verdict.reason}")
-            rejected_book.append(proposal)
-
-        currency_gap = 0
-        balance.amount = balance.first_amount
-        for prop in book:
-            delta = evaluate_trade(prop, proposal.created_at)
-            num_delta = convert_currency(delta["principal"], delta["currency"], balance.currency)
-            balance.amount += convert_currency(delta["total"], delta["currency"], balance.currency)
-            currency_gap += num_delta
-
-        print("\n" + "=" * 50)
-
-        print(f"Капитал: {balance.amount}M {balance.currency}")
-        print("Процентный GAP: -")
-        print(f"Валютный GAP: {currency_gap}M {balance.currency}")
-        print("Портфель:", book)
-        print("Пропущенные сделки:", rejected_book)
-
-        print("\n" + "=" * 50)
+    print("\n=== ИТОГОВЫЙ ПОРТФЕЛЬ ===")
+    print(f"Всего кредитов: {len(portfolio.loans)} на сумму {portfolio.total_loans():,.2f} руб.")
+    print(f"Всего депозитов: {len(portfolio.deposits)} на сумму {portfolio.total_deposits():,.2f} руб.")
+    print(f"Нетто-позиция: {portfolio.net_position():,.2f} руб.")
+    final_gap = portfolio.gap_by_term()
+    print("Процентный GAP по срокам:")
+    for bucket, val in final_gap.items():
+        print(f"  {bucket}: {val:,.2f} руб.")
 
 
 if __name__ == "__main__":
-    main()
+    run_simulation(8)
