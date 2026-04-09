@@ -1,4 +1,5 @@
 from models import BaseAgent, Portfolio
+from utils import write_report
 
 
 class Treasury(BaseAgent):
@@ -10,62 +11,50 @@ class Treasury(BaseAgent):
         self.base_rate = base_rate
         self.spread = spread
 
-    def allowed_deposit_rate(self, amount: float, term_months: int) -> float:
-        """Рассчитывает максимальную ставку по депозиту исходя из текущего портфеля"""
+    def allowed_deposit_rate(self, amount: float, term_months: int, credit_score: int) -> float:
         net = self.portfolio.net_position()
-        # Если кредитов больше, чем депозитов (net > 0), банку нужна ликвидность → повышаем ставку
         if net > 0:
             premium = min(0.03, net / (self.portfolio.total_deposits() + 1e-6) * 0.01)
         else:
-            premium = -0.01  # избыток депозитов → понижаем ставку
+            premium = -0.01
         rate = self.base_rate + premium
-        # Ограничиваем разумными пределами
+        norm = (credit_score - 1) / 998
+        bonus = norm * 0.03
+        rate += bonus
         return max(0.01, min(0.20, rate))
 
     def receive(self, from_agent: str, message: dict):
         msg_type = message.get("type")
         if msg_type == "rate_request":
-            # Запрос на предложение депозита
-            amount = message["amount"]
-            term = message["term"]
-            allowed = self.allowed_deposit_rate(amount, term)
-            print(f"[{self.name}] Рассчитал ставку для депозита {amount} руб. на {term} мес.: {allowed * 100:.2f}%")
+            score = message["credit_score"]
+            allowed = self.allowed_deposit_rate(message["amount"], message["term"], score)
+            write_report(
+                f"[{self.name}] Ставка для депозита {message['amount']} руб. на {message['term']} мес. = {allowed * 100:.2f}% (ПКР={score})")
             self.send(from_agent, {
-                "type": "rate_response",
-                "deal_id": message["deal_id"],
-                "allowed_rate": allowed,
-                "amount": amount,
-                "term": term,
-                "client": message["client"],
+                "type": "rate_response", "deal_id": message["deal_id"],
+                "allowed_rate": allowed, "amount": message["amount"],
+                "term": message["term"], "client": message["client"],
+                "credit_score": score,
             })
         elif msg_type == "counter_request":
-            # Контрпредложение клиента: проверяем, можем ли дать запрошенную ставку
             requested = message["requested_rate"]
-            amount = message["amount"]
-            term = message["term"]
-            allowed = self.allowed_deposit_rate(amount, term)
+            score = message.get("credit_score", 500)
+            allowed = self.allowed_deposit_rate(message["amount"], message["term"], score)
             if requested <= allowed:
-                print(
-                    f"[{self.name}] Разрешаю контрпредложение: ставка {requested * 100:.2f}% (максимум {allowed * 100:.2f}%)")
+                write_report(f"[{self.name}] Разрешаю контрпредложение: {requested * 100:.2f}%")
                 self.send(from_agent, {
-                    "type": "counter_response",
-                    "allowed": True,
-                    "deal_id": message["deal_id"],
-                    "rate": requested,
-                    "amount": amount,
-                    "term": term,
-                    "client": message["client"],
+                    "type": "counter_response", "allowed": True,
+                    "deal_id": message["deal_id"], "rate": requested,
+                    "amount": message["amount"], "term": message["term"],
+                    "client": message["client"], "credit_score": score,
                 })
             else:
-                print(
-                    f"[{self.name}] Отклоняю контрпредложение: ставка {requested * 100:.2f}% выше лимита {allowed * 100:.2f}%")
+                write_report(f"[{self.name}] Отклоняю контрпредложение: {requested * 100:.2f}% > {allowed * 100:.2f}%")
                 self.send(from_agent, {
-                    "type": "counter_response",
-                    "allowed": False,
-                    "deal_id": message["deal_id"],
-                    "client": message["client"],
+                    "type": "counter_response", "allowed": False,
+                    "deal_id": message["deal_id"], "client": message["client"],
+                    "credit_score": score,
                 })
         elif msg_type == "portfolio_updated":
-            # Запрос пересчёта рисков – отправляем агенту риски для отображения GAP
             gap = self.portfolio.gap_by_term()
             self.send(self.risk_name, {"type": "gap_report", "gap": gap})

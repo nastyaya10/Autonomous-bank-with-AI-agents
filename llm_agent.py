@@ -1,7 +1,7 @@
 import json
-import time
-from openai import OpenAI, APIError, APITimeoutError, APIConnectionError
+from openai import OpenAI
 from models import BaseAgent, Decision
+from utils import log_message, logger
 
 
 class LLMAgent(BaseAgent):
@@ -10,12 +10,16 @@ class LLMAgent(BaseAgent):
         self.client = OpenAI(
             api_key=config_list[0]['api_key'],
             base_url=config_list[0]['base_url'],
-            timeout=30.0,  # таймаут на соединение и чтение
-            max_retries=1,  # не ретраить слишком долго
+            timeout=30.0,
+            max_retries=1,
         )
         self.model = config_list[0]['model']
         self.system_prompt = system_prompt
         self.conversations = {}
+
+    def send(self, to: str, message: dict):
+        log_message(self.name, to, message)
+        super().send(to, message)
 
     def _get_conversation(self, deal_id: str):
         if deal_id not in self.conversations:
@@ -28,7 +32,7 @@ class LLMAgent(BaseAgent):
         conv = self._get_conversation(deal_id)
         conv.append({"role": "user", "content": user_prompt})
         try:
-            print(f"[{self.name}] → отправляю запрос к LLM (сделка {deal_id[:8]}...)")
+            logger.info(f"[{self.name}] → LLM запрос (сделка {deal_id[:8]})")
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=conv,
@@ -37,19 +41,10 @@ class LLMAgent(BaseAgent):
             )
             reply = response.choices[0].message.content
             conv.append({"role": "assistant", "content": reply})
-            print(f"[{self.name}] ← получен ответ от LLM")
+            logger.info(f"[{self.name}] ← LLM ответ: {reply[:200]}")
             return reply
-        except APITimeoutError:
-            print(f"[{self.name}] ❌ Таймаут API (30 сек). Возвращаю отказ.")
-            return '{"decision": "reject"}'
-        except APIConnectionError as e:
-            print(f"[{self.name}] ❌ Ошибка соединения: {e}. Возвращаю отказ.")
-            return '{"decision": "reject"}'
-        except APIError as e:
-            print(f"[{self.name}] ❌ Ошибка API: {e}. Возвращаю отказ.")
-            return '{"decision": "reject"}'
         except Exception as e:
-            print(f"[{self.name}] ❌ Неизвестная ошибка: {e}. Возвращаю отказ.")
+            logger.error(f"[{self.name}] Ошибка LLM: {e}")
             return '{"decision": "reject"}'
 
     def parse_decision(self, llm_output: str) -> tuple[Decision, float | None]:
@@ -72,5 +67,5 @@ class LLMAgent(BaseAgent):
             else:
                 return Decision.REJECT, None
         except Exception as e:
-            print(f"[{self.name}] Ошибка парсинга JSON: {e}\nОтвет: {llm_output}")
+            logger.error(f"Парсинг ошибка: {e}, ответ: {llm_output}")
             return Decision.REJECT, None
