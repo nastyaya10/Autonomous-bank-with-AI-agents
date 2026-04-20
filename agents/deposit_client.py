@@ -1,3 +1,4 @@
+from datetime import datetime
 from llm_agent import LLMAgent
 from models import Decision
 from utils import write_report
@@ -22,6 +23,7 @@ class DepositClient(LLMAgent):
             rate_dec = message["rate"]
             rate_percent = rate_dec * 100
             credit_score = message.get("credit_score", 500)
+            current_date = datetime.fromisoformat(message.get("current_date", datetime.now().isoformat()))
             write_report(
                 f"[{self.name}] Предложение депозита: {amount} руб., {term} мес., ставка {rate_percent:.2f}%, ПКР={credit_score}")
             prompt = f"Банк предлагает депозит {amount} руб. на {term} мес. под {rate_percent:.2f}%. Твой минимум {self.min_rate_willing * 100:.2f}%. Твоё решение? Ответь JSON."
@@ -30,20 +32,34 @@ class DepositClient(LLMAgent):
             if decision == Decision.ACCEPT:
                 write_report(f"[{self.name}] Соглашаемся на ставку {rate_percent:.2f}%")
                 self.send(from_agent, {
-                    "type": "client_response", "decision": Decision.ACCEPT,
-                    "deal_id": deal_id, "amount": amount, "term": term, "rate": rate_dec,
+                    "type": "client_response",
+                    "decision": Decision.ACCEPT,
+                    "deal_id": deal_id,
+                    "amount": amount,
+                    "term": term,
+                    "rate": rate_dec,
                     "credit_score": credit_score,
+                    "current_date": current_date.isoformat(),
                 })
             elif decision == Decision.REJECT:
                 write_report(f"[{self.name}] Отказ")
-                self.send(from_agent, {"type": "client_response", "decision": Decision.REJECT, "deal_id": deal_id})
+                self.send(from_agent, {
+                    "type": "client_response",
+                    "decision": Decision.REJECT,
+                    "deal_id": deal_id,
+                    "current_date": current_date.isoformat(),
+                })
             elif decision == Decision.COUNTER and counter_rate_percent is not None:
                 write_report(f"[{self.name}] Просим ставку выше: {counter_rate_percent * 100:.2f}%")
                 self.send(from_agent, {
-                    "type": "client_response", "decision": Decision.COUNTER,
-                    "deal_id": deal_id, "amount": amount, "term": term,
+                    "type": "client_response",
+                    "decision": Decision.COUNTER,
+                    "deal_id": deal_id,
+                    "amount": amount,
+                    "term": term,
                     "counter_rate": counter_rate_percent,
                     "credit_score": credit_score,
+                    "current_date": current_date.isoformat(),
                 })
         elif msg_type == "deal_confirmed":
             write_report(f"[{self.name}] Депозит {message['deal_id'][:8]} подтверждён")

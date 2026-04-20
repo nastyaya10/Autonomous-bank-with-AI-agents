@@ -1,3 +1,4 @@
+from datetime import datetime
 from models import BaseAgent, Portfolio
 from utils import write_report
 
@@ -31,10 +32,14 @@ class Treasury(BaseAgent):
             write_report(
                 f"[{self.name}] Ставка для депозита {message['amount']} руб. на {message['term']} мес. = {allowed * 100:.2f}% (ПКР={score})")
             self.send(from_agent, {
-                "type": "rate_response", "deal_id": message["deal_id"],
-                "allowed_rate": allowed, "amount": message["amount"],
-                "term": message["term"], "client": message["client"],
+                "type": "rate_response",
+                "deal_id": message["deal_id"],
+                "allowed_rate": allowed,
+                "amount": message["amount"],
+                "term": message["term"],
+                "client": message["client"],
                 "credit_score": score,
+                "current_date": message.get("current_date", datetime.now().isoformat()),
             })
         elif msg_type == "counter_request":
             requested = message["requested_rate"]
@@ -43,18 +48,27 @@ class Treasury(BaseAgent):
             if requested <= allowed:
                 write_report(f"[{self.name}] Разрешаю контрпредложение: {requested * 100:.2f}%")
                 self.send(from_agent, {
-                    "type": "counter_response", "allowed": True,
-                    "deal_id": message["deal_id"], "rate": requested,
-                    "amount": message["amount"], "term": message["term"],
-                    "client": message["client"], "credit_score": score,
+                    "type": "counter_response",
+                    "allowed": True,
+                    "deal_id": message["deal_id"],
+                    "rate": requested,
+                    "amount": message["amount"],
+                    "term": message["term"],
+                    "client": message["client"],
+                    "credit_score": score,
+                    "current_date": message.get("current_date", datetime.now().isoformat()),
                 })
             else:
                 write_report(f"[{self.name}] Отклоняю контрпредложение: {requested * 100:.2f}% > {allowed * 100:.2f}%")
                 self.send(from_agent, {
-                    "type": "counter_response", "allowed": False,
-                    "deal_id": message["deal_id"], "client": message["client"],
+                    "type": "counter_response",
+                    "allowed": False,
+                    "deal_id": message["deal_id"],
+                    "client": message["client"],
                     "credit_score": score,
+                    "current_date": message.get("current_date", datetime.now().isoformat()),
                 })
         elif msg_type == "portfolio_updated":
-            gap = self.portfolio.gap_by_term()
+            # просто передаём дальше, текущая дата не нужна для риска
+            gap = self.portfolio.gap_by_remaining_term(datetime.now())
             self.send(self.risk_name, {"type": "gap_report", "gap": gap})

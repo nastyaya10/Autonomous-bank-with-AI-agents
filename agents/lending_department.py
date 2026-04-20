@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta
 from models import Deal, DealType, LoanType, Decision, Portfolio
 from llm_agent import LLMAgent
 from utils import write_report
@@ -18,7 +19,7 @@ class LendingDepartment(LLMAgent):
         self.rate_limit_max = rate_limit_max
 
     def propose_loan(self, client_name: str, amount: float, term_months: int,
-                     credit_score: int, loan_type: LoanType) -> str:
+                     credit_score: int, loan_type: LoanType, current_date: datetime) -> str:
         deal_id = str(uuid.uuid4())
         norm = (credit_score - 1) / 998
         proposed_rate = self.rate_limit_min + (self.rate_limit_max - self.rate_limit_min) * (1 - norm)
@@ -31,6 +32,7 @@ class LendingDepartment(LLMAgent):
             "rate": proposed_rate,
             "credit_score": credit_score,
             "loan_type": loan_type.value,
+            "current_date": current_date.isoformat(),
         }
         write_report(
             f"[{self.name}] Предлагаю кредит {amount} руб. на {term_months} мес. под {proposed_rate * 100:.2f}% (ПКР={credit_score})")
@@ -42,14 +44,19 @@ class LendingDepartment(LLMAgent):
         if msg_type == "client_response":
             deal_id = message["deal_id"]
             decision = message["decision"]
+            current_date = datetime.fromisoformat(message.get("current_date", datetime.now().isoformat()))
             if decision == Decision.ACCEPT:
                 deal = Deal(
-                    deal_id=deal_id, type=DealType.LOAN,
-                    amount=message["amount"], term_months=message["term"],
-                    rate=message["rate"], client_id=from_agent,
+                    deal_id=deal_id,
+                    type=DealType.LOAN,
+                    amount=message["amount"],
+                    term_months=message["term"],
+                    rate=message["rate"],
+                    client_id=from_agent,
                     credit_score=message.get("credit_score", 500),
                     loan_type=LoanType(message.get("loan_type", "fixed")),
-                    status="agreed"
+                    status="active",
+                    created_at=current_date,
                 )
                 self.portfolio.add_loan(deal)
                 write_report(
@@ -62,12 +69,16 @@ class LendingDepartment(LLMAgent):
                 if self.rate_limit_min <= client_rate <= self.rate_limit_max:
                     write_report(f"[{self.name}] Принимаем контрпредложение: ставка {client_rate * 100:.2f}%")
                     deal = Deal(
-                        deal_id=deal_id, type=DealType.LOAN,
-                        amount=message["amount"], term_months=message["term"],
-                        rate=client_rate, client_id=from_agent,
+                        deal_id=deal_id,
+                        type=DealType.LOAN,
+                        amount=message["amount"],
+                        term_months=message["term"],
+                        rate=client_rate,
+                        client_id=from_agent,
                         credit_score=message.get("credit_score", 500),
                         loan_type=LoanType(message.get("loan_type", "fixed")),
-                        status="agreed"
+                        status="active",
+                        created_at=current_date,
                     )
                     self.portfolio.add_loan(deal)
                     self.send(from_agent, {"type": "deal_confirmed", "deal_id": deal_id})

@@ -7,6 +7,5 @@ class RiskAgent(BaseAgent):
         self.portfolio = portfolio
 
     def receive(self, from_agent: str, message: dict):
-        if message.get("type") == "gap_report":
-            # Данные уже обработаны в main.py, здесь ничего не пишем
-            pass
+        # Агент рисков только принимает данные, отчёт уже формируется в main.py
+        pass
