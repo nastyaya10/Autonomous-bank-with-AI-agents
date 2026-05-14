@@ -4,18 +4,22 @@ from typing import List, Dict, Any, Optional
 from enum import Enum
 from datetime import datetime, timedelta
 
+
 class DealType(Enum):
     LOAN = "loan"
     DEPOSIT = "deposit"
+
 
 class LoanType(Enum):
     FIXED = "fixed"
     FLOATING = "floating"
 
+
 class Decision(Enum):
     ACCEPT = "accept"
     REJECT = "reject"
     COUNTER = "counter"
+
 
 @dataclass
 class Deal:
@@ -23,11 +27,11 @@ class Deal:
     type: DealType
     amount: float
     term_months: int
-    rate: float          # для фиксированной ставки или спред для плавающей
+    rate: float
     client_id: str
     credit_score: int
     loan_type: Optional[LoanType] = None
-    status: str = "active"  # active, matured
+    status: str = "active"
     created_at: datetime = field(default_factory=datetime.now)
     maturity_date: Optional[datetime] = None
 
@@ -40,6 +44,7 @@ class Deal:
 
     def is_matured(self, current_date: datetime) -> bool:
         return current_date >= self.maturity_date
+
 
 @dataclass
 class Portfolio:
@@ -69,16 +74,24 @@ class Portfolio:
         buckets = {"0-90d": 0.0, "90-180d": 0.0, "180-365d": 0.0, ">365d": 0.0}
         for loan in self.loans:
             rem = loan.remaining_term_days(current_date)
-            if rem <= 90: buckets["0-90d"] += loan.amount
-            elif rem <= 180: buckets["90-180d"] += loan.amount
-            elif rem <= 365: buckets["180-365d"] += loan.amount
-            else: buckets[">365d"] += loan.amount
+            if rem <= 90:
+                buckets["0-90d"] += loan.amount
+            elif rem <= 180:
+                buckets["90-180d"] += loan.amount
+            elif rem <= 365:
+                buckets["180-365d"] += loan.amount
+            else:
+                buckets[">365d"] += loan.amount
         for dep in self.deposits:
             rem = dep.remaining_term_days(current_date)
-            if rem <= 90: buckets["0-90d"] -= dep.amount
-            elif rem <= 180: buckets["90-180d"] -= dep.amount
-            elif rem <= 365: buckets["180-365d"] -= dep.amount
-            else: buckets[">365d"] -= dep.amount
+            if rem <= 90:
+                buckets["0-90d"] -= dep.amount
+            elif rem <= 180:
+                buckets["90-180d"] -= dep.amount
+            elif rem <= 365:
+                buckets["180-365d"] -= dep.amount
+            else:
+                buckets[">365d"] -= dep.amount
         return buckets
 
     def weighted_loan_rate(self, yield_curve=None) -> float:
@@ -104,12 +117,18 @@ class Portfolio:
         weighted = sum(d.amount * d.rate for d in self.deposits)
         return weighted / total
 
+
 @dataclass
 class YieldCurve:
     key_rate: float
     base_spread: float = 0.02
+    term_premium: float = 0.01  # годовая премия за каждый год срока (1%)
+
     def rate(self, term_months: int) -> float:
-        return self.key_rate + self.base_spread
+        """Ставка в зависимости от срока: key_rate + term_premium * (term/12) + base_spread"""
+        years = term_months / 12.0
+        return self.key_rate + self.term_premium * years + self.base_spread
+
 
 @dataclass
 class PnL:
@@ -134,6 +153,7 @@ class PnL:
         self.total_interest_expense += expense
         self.net_interest_income = self.total_interest_income - self.total_interest_expense
 
+
 @dataclass
 class RiskMetrics:
     var_95: float = 0.0
@@ -150,6 +170,7 @@ class RiskMetrics:
         self.nii_sensitivity = nii_new - nii_original
         self.var_95 = 0.05 * abs(portfolio.net_position())
 
+
 @dataclass
 class TimeSnapshot:
     date: datetime
@@ -160,12 +181,14 @@ class TimeSnapshot:
     nii: float
     var: float
 
+
 class GapHistory:
     def __init__(self):
         self.entries: List[TimeSnapshot] = []
 
     def record(self, snapshot: TimeSnapshot):
         self.entries.append(snapshot)
+
 
 class MessageBus:
     def __init__(self):
@@ -179,6 +202,7 @@ class MessageBus:
         if to_agent not in self.agents:
             raise ValueError(f"Agent {to_agent} not found")
         self.agents[to_agent].receive(from_agent, message)
+
 
 class BaseAgent:
     def __init__(self, name: str):

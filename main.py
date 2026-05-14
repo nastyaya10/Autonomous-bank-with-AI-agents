@@ -1,9 +1,10 @@
-from dotenv import load_dotenv
-
-load_dotenv()
 import os
 import random
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from models import (
     Portfolio, MessageBus, LoanType, YieldCurve,
     PnL, RiskMetrics, TimeSnapshot
@@ -14,12 +15,16 @@ from agents import (
     Treasury, RiskAgent
 )
 from utils import write_report
-from visualizer import plot_time_series
+from visualizer import plot_time_series, plot_deposit_rates  # импорт новой функции
+
+api_key = os.getenv('OPENAI_API_KEY') or os.getenv('AIPIPE_TOKEN')
+if not api_key:
+    raise ValueError("Установите переменную окружения OPENAI_API_KEY или AIPIPE_TOKEN")
 
 config_list = [
     {
         'model': 'gpt-4o-mini',
-        'api_key': os.getenv('AIPIPE_TOKEN'),
+        'api_key': api_key,
         'base_url': os.getenv('OPENAI_BASE_URL', 'https://aipipe.org/openai/v1'),
     }
 ]
@@ -56,7 +61,6 @@ def run_simulation(simulation_days: int = 180):
     snapshots = []
 
     while current_date <= end_date:
-        # С вероятностью 0.4 происходит новая сделка (чтобы портфель не рос слишком быстро)
         if random.random() < 0.4:
             write_report(f"\n--- СДЕЛКА {current_date.strftime('%Y-%m-%d')} ---")
             if random.choice(["loan", "deposit"]) == "loan":
@@ -74,17 +78,12 @@ def run_simulation(simulation_days: int = 180):
                 write_report(f"Инициируем депозит: сумма {amount} руб., срок {term} мес., ПКР={score}")
                 deposit_dept.propose_deposit("DepositClient", amount, term, score, current_date)
 
-        # Ежедневное начисление процентов
         pnl.accrue_daily(portfolio, yield_curve, days=1)
-
-        # Удаление погашенных сделок
         portfolio.remove_matured(current_date)
 
-        # Расчёт метрик
         current_gap = portfolio.gap_by_remaining_term(current_date)
         risk_metrics.calculate(portfolio, yield_curve)
 
-        # Снимок для истории
         snapshot = TimeSnapshot(
             date=current_date,
             loans=portfolio.total_loans(),
@@ -96,7 +95,6 @@ def run_simulation(simulation_days: int = 180):
         )
         snapshots.append(snapshot)
 
-        # Отчёт за день (только в файл)
         daily_report = f"\n=== ОТЧЁТ за {current_date.strftime('%Y-%m-%d')} ===\n"
         daily_report += f"💰 PnL: доход {pnl.total_interest_income:.2f}, расход {pnl.total_interest_expense:.2f}, NII {pnl.net_interest_income:.2f}\n"
         daily_report += f"⚠️ Риск: VaR(95%) = {risk_metrics.var_95:.2f}, чувствительность NII к +1% = {risk_metrics.nii_sensitivity:.2f}\n"
@@ -108,10 +106,8 @@ def run_simulation(simulation_days: int = 180):
         daily_report += "========================"
         write_report(daily_report)
 
-        # Переход к следующему дню
         current_date += timedelta(days=1)
 
-    # Итоговый отчёт
     write_report("\n=== ИТОГОВЫЙ ОТЧЁТ ПО ВСЕМУ ПЕРИОДУ ===")
     write_report(f"Всего дней симуляции: {simulation_days}")
     write_report(f"Итоговый PnL: {pnl.net_interest_income:.2f} руб.")
@@ -119,6 +115,7 @@ def run_simulation(simulation_days: int = 180):
 
     # Визуализация
     plot_time_series(snapshots)
+    plot_deposit_rates(yield_curve, portfolio)  # новый график
 
 
 if __name__ == "__main__":

@@ -1,70 +1,85 @@
 from datetime import datetime
 from llm_agent import LLMAgent
 from models import Decision, LoanType
-from utils import write_report
+from utils import write_report, logger
 
 
 class CreditClient(LLMAgent):
-    def __init__(self, name: str, config_list: list, max_rate_willing: float = 0.18):
-        system_prompt = f"""Ты — клиент-кредитор (заёмщик). Твоя максимальная приемлемая ставка — {max_rate_willing * 100:.2f}% годовых.
-Ты хочешь получить кредит как можно дешевле. Если предложенная ставка ниже твоего максимума, ты можешь согласиться, но лучше попробовать снизить ставку на 1-3%.
-Если ставка выше твоего максимума, ты обязательно делаешь контрпредложение со ставкой на 1-2% ниже твоего максимума.
-Отвечай ТОЛЬКО JSON: {{"decision": "accept"/"reject"/"counter", "rate": число (если counter)}}.
-Ставку указывай в процентах годовых."""
-        super().__init__(name, config_list, system_prompt)
+    def __init__(self, name: str, config_list: list, max_rate_willing: float = 0.25):
+        system_prompt = (
+            f"Ты клиент-заёмщик. Твой максимально допустимый процент по кредиту: {max_rate_willing * 100:.1f}% годовых. "
+            f"Ты хочешь кредит на лучших условиях.\n"
+            f"ПРАВИЛА (строго соблюдай):\n"
+            f"1. Если предложенная ставка МЕНЬШЕ или РАВНА твоему максимуму, ты обязан согласиться. Отвечай: {{\"decision\":\"accept\"}}\n"
+            f"2. Если ставка ВЫШЕ максимума, ты должен предложить встречную ставку (counter), которая на 1-2% ниже твоего максимума. "
+            f"Отвечай: {{\"decision\":\"counter\",\"rate\":<число>}}\n"
+            f"3. Запрещено отвечать reject, если ставка <= максимума.\n"
+            f"4. Отвечай только JSON, без пояснений."
+        )
+        # Низкая температура для стабильных решений
+        super().__init__(name, config_list, system_prompt, temperature=0.2)
         self.max_rate_willing = max_rate_willing
 
     def receive(self, from_agent: str, message: dict):
-        msg_type = message.get("type")
-        if msg_type == "loan_proposal":
-            deal_id = message["deal_id"]
-            amount = message["amount"]
-            term = message["term"]
-            rate_dec = message["rate"]
-            rate_percent = rate_dec * 100
-            credit_score = message.get("credit_score", 500)
-            loan_type = LoanType(message.get("loan_type", "fixed"))
-            current_date = datetime.fromisoformat(message.get("current_date", datetime.now().isoformat()))
-            write_report(
-                f"[{self.name}] Предложение кредита: {amount} руб., {term} мес., ставка {rate_percent:.2f}%, ПКР={credit_score}, тип={loan_type.value}")
-            prompt = f"Банк предлагает кредит {amount} руб. на {term} мес. под {rate_percent:.2f}%. Твой максимум {self.max_rate_willing * 100:.2f}%. Твоё решение? Ответь JSON."
-            llm_out = self._call_llm(deal_id, prompt)
-            decision, counter_rate_percent = self.parse_decision(llm_out)
-            if decision == Decision.ACCEPT:
-                write_report(f"[{self.name}] Соглашаемся на ставку {rate_percent:.2f}%")
-                self.send(from_agent, {
-                    "type": "client_response",
-                    "decision": Decision.ACCEPT,
-                    "deal_id": deal_id,
-                    "amount": amount,
-                    "term": term,
-                    "rate": rate_dec,
-                    "credit_score": credit_score,
-                    "loan_type": loan_type.value,
-                    "current_date": current_date.isoformat(),
-                })
-            elif decision == Decision.REJECT:
-                write_report(f"[{self.name}] Отказ")
-                self.send(from_agent, {
-                    "type": "client_response",
-                    "decision": Decision.REJECT,
-                    "deal_id": deal_id,
-                    "current_date": current_date.isoformat(),
-                })
-            elif decision == Decision.COUNTER and counter_rate_percent is not None:
-                write_report(f"[{self.name}] Контрпредложение: ставка {counter_rate_percent * 100:.2f}%")
-                self.send(from_agent, {
-                    "type": "client_response",
-                    "decision": Decision.COUNTER,
-                    "deal_id": deal_id,
-                    "amount": amount,
-                    "term": term,
-                    "counter_rate": counter_rate_percent,
-                    "credit_score": credit_score,
-                    "loan_type": loan_type.value,
-                    "current_date": current_date.isoformat(),
-                })
-        elif msg_type == "deal_confirmed":
-            write_report(f"[{self.name}] Сделка {message['deal_id'][:8]} подтверждена")
-        elif msg_type == "reject_counter":
-            write_report(f"[{self.name}] Банк отклонил наше контрпредложение")
+        if message.get("type") != "loan_proposal":
+            return
+
+        deal_id = message["deal_id"]
+        amount = message["amount"]
+        term = message["term"]
+        rate_dec = message["rate"]
+        rate_percent = rate_dec * 100
+        credit_score = message.get("credit_score", 500)
+        loan_type = LoanType(message.get("loan_type", "fixed"))
+        current_date = message.get("current_date")
+
+        write_report(
+            f"[{self.name}] Предложение кредита: {amount} руб., {term} мес., ставка {rate_percent:.2f}%, ПКР={credit_score}")
+
+        prompt = (
+            f"Предложен кредит: сумма {amount} руб., срок {term} мес., ставка {rate_percent:.2f}% годовых. "
+            f"Твой максимум {self.max_rate_willing * 100:.1f}%. Твоё решение (только JSON)."
+        )
+
+        llm_out = self._call_llm_json(deal_id, prompt)
+        decision, counter_rate_percent = self.parse_decision(llm_out)
+
+        if decision is None:
+            logger.warning(f"[{self.name}] Не удалось распарсить решение LLM, сделка игнорируется")
+            return
+
+        if decision == Decision.ACCEPT:
+            write_report(f"[{self.name}] Соглашаемся на ставку {rate_percent:.2f}%")
+            self.send(from_agent, {
+                "type": "client_response",
+                "decision": Decision.ACCEPT,
+                "deal_id": deal_id,
+                "amount": amount,
+                "term": term,
+                "rate": rate_dec,
+                "credit_score": credit_score,
+                "loan_type": loan_type.value,
+                "current_date": current_date,
+            })
+        elif decision == Decision.REJECT:
+            write_report(f"[{self.name}] Отказ")
+            self.send(from_agent, {
+                "type": "client_response",
+                "decision": Decision.REJECT,
+                "deal_id": deal_id,
+                "current_date": current_date,
+            })
+        elif decision == Decision.COUNTER and counter_rate_percent is not None:
+            counter_rate_dec = counter_rate_percent / 100.0
+            write_report(f"[{self.name}] Контрпредложение: {counter_rate_percent:.2f}%")
+            self.send(from_agent, {
+                "type": "client_response",
+                "decision": Decision.COUNTER,
+                "deal_id": deal_id,
+                "amount": amount,
+                "term": term,
+                "counter_rate": counter_rate_dec,
+                "credit_score": credit_score,
+                "loan_type": loan_type.value,
+                "current_date": current_date,
+            })

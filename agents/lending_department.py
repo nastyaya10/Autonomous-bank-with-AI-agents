@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from models import Deal, DealType, LoanType, Decision, Portfolio
 from llm_agent import LLMAgent
 from utils import write_report

@@ -7,5 +7,5 @@ class RiskAgent(BaseAgent):
         self.portfolio = portfolio
 
     def receive(self, from_agent: str, message: dict):
-        # Агент рисков только принимает данные, отчёт уже формируется в main.py
+        # Вся аналитика выполняется в main.py
         pass

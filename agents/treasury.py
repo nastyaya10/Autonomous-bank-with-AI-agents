@@ -69,6 +69,5 @@ class Treasury(BaseAgent):
                     "current_date": message.get("current_date", datetime.now().isoformat()),
                 })
         elif msg_type == "portfolio_updated":
-            # просто передаём дальше, текущая дата не нужна для риска
             gap = self.portfolio.gap_by_remaining_term(datetime.now())
             self.send(self.risk_name, {"type": "gap_report", "gap": gap})
