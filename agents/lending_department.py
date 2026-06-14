@@ -7,7 +7,7 @@ from utils import write_report
 
 class LendingDepartment(LLMAgent):
     def __init__(self, name: str, portfolio: Portfolio, config_list: list,
-                 rate_limit_min: float = 0.10, rate_limit_max: float = 0.25):
+                 rate_limit_min: float = 0.10, rate_limit_max: float = 0.35):
         system_prompt = f"""Ты — Выдающее отделение банка. Твоя задача — предлагать кредиты клиентам и реагировать на их контрпредложения.
 У тебя есть лимиты: ставка кредита должна быть между {rate_limit_min * 100:.2f}% и {rate_limit_max * 100:.2f}% годовых.
 Если клиент предлагает контрставку, ты можешь согласиться (accept), если она в лимитах, иначе откажи (reject).
@@ -19,7 +19,8 @@ class LendingDepartment(LLMAgent):
         self.rate_limit_max = rate_limit_max
 
     def propose_loan(self, client_name: str, amount: float, term_months: int,
-                     credit_score: int, loan_type: LoanType, current_date: datetime) -> str:
+                     credit_score: int, loan_type: LoanType, current_date: datetime,
+                     risk_free_rate: float = None) -> str:
         deal_id = str(uuid.uuid4())
         norm = (credit_score - 1) / 998
         proposed_rate = self.rate_limit_min + (self.rate_limit_max - self.rate_limit_min) * (1 - norm)
@@ -34,6 +35,8 @@ class LendingDepartment(LLMAgent):
             "loan_type": loan_type.value,
             "current_date": current_date.isoformat(),
         }
+        if risk_free_rate is not None:
+            message["risk_free_rate"] = risk_free_rate
         write_report(
             f"[{self.name}] Предлагаю кредит {amount} руб. на {term_months} мес. под {proposed_rate * 100:.2f}% (ПКР={credit_score})")
         self.send(client_name, message)

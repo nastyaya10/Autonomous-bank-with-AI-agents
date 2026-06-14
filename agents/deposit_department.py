@@ -15,11 +15,12 @@ class DepositDepartment(LLMAgent):
         self.risk_name = risk_name
 
     def propose_deposit(self, client_name: str, amount: float, term_months: int,
-                        credit_score: int, current_date: datetime) -> str:
+                        credit_score: int, current_date: datetime,
+                        risk_free_rate: float = None) -> str:
         deal_id = str(uuid.uuid4())
         write_report(
             f"[{self.name}] Запрашиваю у Казначейства ставку для депозита: {amount} руб., {term_months} мес., ПКР={credit_score}")
-        self.send(self.treasury_name, {
+        msg = {
             "type": "rate_request",
             "deal_id": deal_id,
             "amount": amount,
@@ -27,16 +28,20 @@ class DepositDepartment(LLMAgent):
             "client": client_name,
             "credit_score": credit_score,
             "current_date": current_date.isoformat(),
-        })
+        }
+        if risk_free_rate is not None:
+            msg["risk_free_rate"] = risk_free_rate
+        self.send(self.treasury_name, msg)
         return deal_id
 
     def receive(self, from_agent: str, message: dict):
         msg_type = message.get("type")
         if msg_type == "rate_response":
             current_date = datetime.fromisoformat(message.get("current_date", datetime.now().isoformat()))
+            rf = message.get("risk_free_rate", None)
             write_report(
                 f"[{self.name}] Получил от Казначейства ставку {message['allowed_rate'] * 100:.2f}%. Отправляю предложение клиенту {message['client']}")
-            self.send(message["client"], {
+            dep_msg = {
                 "type": "deposit_proposal",
                 "deal_id": message["deal_id"],
                 "amount": message["amount"],
@@ -44,7 +49,10 @@ class DepositDepartment(LLMAgent):
                 "rate": message["allowed_rate"],
                 "credit_score": message.get("credit_score"),
                 "current_date": current_date.isoformat(),
-            })
+            }
+            if rf is not None:
+                dep_msg["risk_free_rate"] = rf
+            self.send(message["client"], dep_msg)
         elif msg_type == "client_response":
             deal_id = message["deal_id"]
             decision = message["decision"]

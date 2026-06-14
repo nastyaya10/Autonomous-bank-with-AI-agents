@@ -5,7 +5,7 @@ from utils import write_report, logger
 
 
 class DepositClient(LLMAgent):
-    def __init__(self, name: str, config_list: list, min_rate_willing: float = 0.05):
+    def __init__(self, name: str, config_list: list, min_rate_willing: float = 0.10):
         system_prompt = (
             f"Ты клиент-вкладчик. Твой минимально приемлемый процент по депозиту: {min_rate_willing * 100:.1f}% годовых. "
             f"Ты хочешь максимально высокую ставку.\n"
@@ -13,6 +13,7 @@ class DepositClient(LLMAgent):
             f"1. Если предложенная ставка БОЛЬШЕ или РАВНА твоему минимуму, ты обязан согласиться. Отвечай: {{\"decision\":\"accept\"}}\n"
             f"2. Если ставка НИЖЕ минимума, ты должен предложить встречную ставку (counter), которая на 1-2% выше твоего минимума. "
             f"Отвечай: {{\"decision\":\"counter\",\"rate\":<число>}}\n"
+            f"   Число – это ставка в ПРОЦЕНТАХ годовых (например, 7.5).\n"
             f"3. Запрещено отвечать reject, если ставка >= минимума.\n"
             f"4. Отвечай только JSON, без пояснений."
         )
@@ -30,17 +31,22 @@ class DepositClient(LLMAgent):
         rate_percent = rate_dec * 100
         credit_score = message.get("credit_score", 500)
         current_date = message.get("current_date")
+        risk_free_rate = message.get("risk_free_rate", None)
+
+        rf_str = ""
+        if risk_free_rate is not None:
+            rf_str = f" Текущая безрисковая ставка на {term} мес. составляет {risk_free_rate * 100:.2f}%."
 
         write_report(
             f"[{self.name}] Предложение депозита: {amount} руб., {term} мес., ставка {rate_percent:.2f}%, ПКР={credit_score}")
 
         prompt = (
-            f"Предложен депозит: сумма {amount} руб., срок {term} мес., ставка {rate_percent:.2f}% годовых. "
+            f"Предложен депозит: сумма {amount} руб., срок {term} мес., ставка {rate_percent:.2f}% годовых.{rf_str} "
             f"Твой минимум {self.min_rate_willing * 100:.1f}%. Твоё решение (только JSON)."
         )
 
         llm_out = self._call_llm_json(deal_id, prompt)
-        decision, counter_rate_percent = self.parse_decision(llm_out)
+        decision, counter_rate = self.parse_decision(llm_out)
 
         if decision is None:
             logger.warning(f"[{self.name}] Не удалось распарсить решение LLM, сделка игнорируется")
@@ -66,16 +72,15 @@ class DepositClient(LLMAgent):
                 "deal_id": deal_id,
                 "current_date": current_date,
             })
-        elif decision == Decision.COUNTER and counter_rate_percent is not None:
-            counter_rate_dec = counter_rate_percent / 100.0
-            write_report(f"[{self.name}] Просим ставку выше: {counter_rate_percent:.2f}%")
+        elif decision == Decision.COUNTER and counter_rate is not None:
+            write_report(f"[{self.name}] Просим ставку выше: {counter_rate * 100:.2f}%")
             self.send(from_agent, {
                 "type": "client_response",
                 "decision": Decision.COUNTER,
                 "deal_id": deal_id,
                 "amount": amount,
                 "term": term,
-                "counter_rate": counter_rate_dec,
+                "counter_rate": counter_rate,
                 "credit_score": credit_score,
                 "current_date": current_date,
             })

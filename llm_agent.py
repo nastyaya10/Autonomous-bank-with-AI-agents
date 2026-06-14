@@ -15,7 +15,7 @@ class LLMAgent(BaseAgent):
         )
         self.model = config_list[0]['model']
         self.system_prompt = system_prompt
-        self.temperature = temperature  # можно менять для разных агентов
+        self.temperature = temperature
         self.conversations = {}
 
     def send(self, to: str, message: dict):
@@ -42,7 +42,6 @@ class LLMAgent(BaseAgent):
             reply = response.choices[0].message.content
             conv.append({"role": "assistant", "content": reply})
             logger.info(f"[{self.name}] ← LLM ответ: {reply[:200]}")
-            # Сохраняем полный ответ в лог-файл
             with open("llm_responses.log", "a", encoding="utf-8") as f:
                 f.write(f"=== {self.name} | deal {deal_id[:8]} ===\n")
                 f.write(f"User prompt: {user_prompt}\n")
@@ -53,7 +52,6 @@ class LLMAgent(BaseAgent):
             return '{"decision": "reject"}'
 
     def _call_llm_json(self, deal_id: str, user_prompt: str, max_attempts=2) -> str:
-        """Вызывает LLM и при неудаче парсинга JSON делает повторный запрос с жёстким требованием JSON."""
         for attempt in range(max_attempts):
             if attempt == 0:
                 reply = self._call_llm(deal_id, user_prompt)
@@ -81,9 +79,9 @@ class LLMAgent(BaseAgent):
                 return Decision.REJECT, None
             elif decision_str == "counter":
                 rate = float(data.get("rate", 0.0))
-                if rate > 1:
-                    rate = rate / 100.0
-                return Decision.COUNTER, rate
+                # всегда считаем, что модель вернула проценты -> переводим в десятичную дробь
+                rate_decimal = rate / 100.0
+                return Decision.COUNTER, rate_decimal
             else:
                 return Decision.REJECT, None
         except Exception as e:
