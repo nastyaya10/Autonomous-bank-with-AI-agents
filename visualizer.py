@@ -15,7 +15,6 @@ def plot_time_series(snapshots):
     deposits = [s.deposits for s in snapshots]
     net = [s.net for s in snapshots]
     nii = [s.nii for s in snapshots]
-    var = [s.var for s in snapshots]
     el = [s.expected_loss for s in snapshots]
 
     # График портфеля
@@ -53,12 +52,11 @@ def plot_time_series(snapshots):
     plt.savefig("plots/gap_evolution.png")
     plt.close()
 
-    # График NII, VaR и EL
+    # График NII и ожидаемых потерь
     plt.figure(figsize=(12, 6))
     plt.plot(dates, nii, label="NII (накопленный)", color='green')
-    plt.plot(dates, var, label="VaR(95%)", color='red', linestyle='--')
     plt.plot(dates, el, label="Ожидаемые потери (EL)", color='orange', linestyle='-.')
-    plt.title("NII, VaR и Ожидаемые потери во времени")
+    plt.title("NII и Ожидаемые потери во времени")
     plt.xlabel("Дата")
     plt.ylabel("Руб.")
     plt.legend()
@@ -66,10 +64,10 @@ def plot_time_series(snapshots):
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.savefig("plots/nii_var_el.png")
+    plt.savefig("plots/nii_el.png")
     plt.close()
 
-    # Кривая ОФЗ (статическая)
+    # Кривая ОФЗ
     yc = YieldCurve(key_rate=0.21)
     terms = [1, 3, 6, 12, 24, 36, 60]
     rates = [yc.rate(t) * 100 for t in terms]
@@ -92,16 +90,13 @@ def plot_deposit_rates(yield_curve: YieldCurve, portfolio: Portfolio):
     if not deposits:
         print("Нет активных депозитов для графика ставок.")
         return
-
     deposit_terms = [d.term_months for d in deposits]
     deposit_rates = [d.rate * 100 for d in deposits]
-
     terms_range = sorted(set(deposit_terms + [1, 3, 6, 12, 24, 36, 60]))
     terms_range = [t for t in terms_range if t > 0]
     yc_rates = [yield_curve.rate(t) * 100 for t in terms_range]
-
     plt.figure(figsize=(10, 6))
-    plt.plot(terms_range, yc_rates, 'r-', linewidth=2, label='Кривая ОФЗ (базовая)')
+    plt.plot(terms_range, yc_rates, 'r-', linewidth=2, label='Кривая ОФЗ')
     plt.scatter(deposit_terms, deposit_rates, color='blue', alpha=0.6, label='Депозитные ставки')
     plt.title("Соответствие депозитных ставок кривой ОФЗ")
     plt.xlabel("Срок, мес.")
@@ -118,8 +113,8 @@ def plot_stress_test(stress_dates, base_nii, shocked_nii):
     setup_plots_dir()
     plt.figure(figsize=(10, 5))
     plt.plot(stress_dates, base_nii, label="NII базовый", marker='o')
-    plt.plot(stress_dates, shocked_nii, label="NII после шока (+2%)", marker='x')
-    plt.title("Стресс-тест NII при шоке ключевой ставки на +2%")
+    plt.plot(stress_dates, shocked_nii, label="NII после шока (+4%)", marker='x')
+    plt.title("Стресс-тест NII при шоке ключевой ставки на +4%")
     plt.xlabel("Дата")
     plt.ylabel("NII, руб.")
     plt.legend()

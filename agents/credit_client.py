@@ -1,22 +1,26 @@
 from datetime import datetime
 from llm_agent import LLMAgent
-from models import Decision, LoanType
+from models import Decision, LoanType, ClientSegment
 from utils import write_report, logger
 
 
 class CreditClient(LLMAgent):
-    def __init__(self, name: str, config_list: list, max_rate_willing: float = 0.15):
-        system_prompt = (
-            f"Ты клиент-заёмщик. Твой максимально допустимый процент по кредиту: {max_rate_willing * 100:.1f}% годовых. "
-            f"Ты хочешь кредит на лучших условиях.\n"
-            f"ПРАВИЛА (строго соблюдай):\n"
-            f"1. Если предложенная ставка МЕНЬШЕ или РАВНА твоему максимуму, ты обязан согласиться. Отвечай: {{\"decision\":\"accept\"}}\n"
-            f"2. Если ставка ВЫШЕ максимума, ты должен предложить встречную ставку (counter), которая на 1-2% ниже твоего максимума. "
-            f"Отвечай: {{\"decision\":\"counter\",\"rate\":<число>}}\n"
-            f"   Число – это ставка в ПРОЦЕНТАХ годовых (например, 12.5).\n"
-            f"3. Запрещено отвечать reject, если ставка <= максимума.\n"
-            f"4. Отвечай только JSON, без пояснений."
-        )
+    def __init__(self, name: str, config_list: list, segment: ClientSegment = ClientSegment.MASS,
+                 max_rate_willing: float = 0.15):
+        self.segment = segment
+        if segment == ClientSegment.VIP:
+            system_prompt = (
+                f"Ты VIP-клиент, корпоративный заёмщик. Твой максимально допустимый процент по кредиту: {max_rate_willing * 100:.1f}% годовых.\n"
+                f"Ты можешь торговаться. Если ставка выше твоего максимума, предложи встречную ставку (counter), которая на 1-2% ниже максимума.\n"
+                f"В остальных случаях: если ставка <= максимума – accept, иначе – counter.\n"
+                f"Отвечай только JSON: {{\"decision\":\"accept\"}} или {{\"decision\":\"reject\"}} или {{\"decision\":\"counter\",\"rate\":число}} (проценты)."
+            )
+        else:
+            system_prompt = (
+                f"Ты клиент-заёмщик – физическое лицо. Твой максимально допустимый процент по кредиту: {max_rate_willing * 100:.1f}% годовых.\n"
+                f"Ты не торгуешься. Если ставка <= максимума – accept, иначе – reject.\n"
+                f"Отвечай только JSON: {{\"decision\":\"accept\"}} или {{\"decision\":\"reject\"}}."
+            )
         super().__init__(name, config_list, system_prompt, temperature=0.2)
         self.max_rate_willing = max_rate_willing
 
@@ -32,14 +36,15 @@ class CreditClient(LLMAgent):
         credit_score = message.get("credit_score", 500)
         loan_type = LoanType(message.get("loan_type", "fixed"))
         current_date = message.get("current_date")
-        risk_free_rate = message.get("risk_free_rate", None)  # безрисковая ставка для данного срока
+        risk_free_rate = message.get("risk_free_rate", None)
+        segment = ClientSegment(message.get("segment", "mass"))
 
         rf_str = ""
         if risk_free_rate is not None:
             rf_str = f" Текущая безрисковая ставка на {term} мес. составляет {risk_free_rate * 100:.2f}%."
 
         write_report(
-            f"[{self.name}] Предложение кредита: {amount} руб., {term} мес., ставка {rate_percent:.2f}%, ПКР={credit_score}")
+            f"[{self.name}] Предложение кредита: {amount} руб., {term} мес., ставка {rate_percent:.2f}%, ПКР={credit_score}, сегмент={segment.value}")
 
         prompt = (
             f"Предложен кредит: сумма {amount} руб., срок {term} мес., ставка {rate_percent:.2f}% годовых.{rf_str} "
@@ -65,6 +70,9 @@ class CreditClient(LLMAgent):
                 "credit_score": credit_score,
                 "loan_type": loan_type.value,
                 "current_date": current_date,
+                "segment": segment.value,
+                "schedule": message.get("schedule", "annuity"),
+                "commission_rate": message.get("commission_rate", 0.0)
             })
         elif decision == Decision.REJECT:
             write_report(f"[{self.name}] Отказ")
@@ -73,8 +81,19 @@ class CreditClient(LLMAgent):
                 "decision": Decision.REJECT,
                 "deal_id": deal_id,
                 "current_date": current_date,
+                "segment": segment.value
             })
         elif decision == Decision.COUNTER and counter_rate is not None:
+            if segment != ClientSegment.VIP:
+                write_report(f"[{self.name}] Массовый клиент не может торговаться, отказ")
+                self.send(from_agent, {
+                    "type": "client_response",
+                    "decision": Decision.REJECT,
+                    "deal_id": deal_id,
+                    "current_date": current_date,
+                    "segment": segment.value
+                })
+                return
             write_report(f"[{self.name}] Контрпредложение: {counter_rate * 100:.2f}%")
             self.send(from_agent, {
                 "type": "client_response",
@@ -86,4 +105,7 @@ class CreditClient(LLMAgent):
                 "credit_score": credit_score,
                 "loan_type": loan_type.value,
                 "current_date": current_date,
+                "segment": segment.value,
+                "schedule": message.get("schedule", "annuity"),
+                "commission_rate": message.get("commission_rate", 0.0)
             })

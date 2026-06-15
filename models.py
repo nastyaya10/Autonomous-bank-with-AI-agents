@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from enum import Enum
 from datetime import datetime, timedelta
+import random
 import math
 
 
@@ -22,23 +23,50 @@ class Decision(Enum):
     COUNTER = "counter"
 
 
+class ClientSegment(Enum):
+    MASS = "mass"
+    VIP = "vip"
+
+
+class RepaymentSchedule(Enum):
+    ANNUITY = "annuity"
+    DIFFERENTIATED = "differentiated"
+
+
 @dataclass
 class Deal:
     deal_id: str
     type: DealType
     amount: float
     term_months: int
-    rate: float  # для fixed – ставка, для floating – спред над ключевой ставкой
+    rate: float
     client_id: str
     credit_score: int
     loan_type: Optional[LoanType] = None
     status: str = "active"
     created_at: datetime = field(default_factory=datetime.now)
     maturity_date: Optional[datetime] = None
+    segment: ClientSegment = ClientSegment.MASS
+    effective_rate: float = 0.0
+    outstanding_principal: float = 0.0
+    schedule_type: RepaymentSchedule = RepaymentSchedule.ANNUITY
+    commission_rate: float = 0.0
 
     def __post_init__(self):
         if self.maturity_date is None:
             self.maturity_date = self.created_at + timedelta(days=self.term_months * 30)
+        if self.type == DealType.LOAN:
+            self.outstanding_principal = self.amount
+            self.effective_rate = calculate_effective_rate(
+                principal=self.amount,
+                term_months=self.term_months,
+                rate=self.rate,
+                is_floating=(self.loan_type == LoanType.FLOATING),
+                schedule=self.schedule_type,
+                commission_rate=self.commission_rate
+            )
+        else:
+            self.outstanding_principal = self.amount
 
     def remaining_term_days(self, current_date: datetime) -> int:
         return max(0, (self.maturity_date - current_date).days)
@@ -46,11 +74,68 @@ class Deal:
     def is_matured(self, current_date: datetime) -> bool:
         return current_date >= self.maturity_date
 
+    def get_monthly_payment(self) -> float:
+        if self.type != DealType.LOAN or self.outstanding_principal <= 0:
+            return 0.0
+        if self.schedule_type == RepaymentSchedule.ANNUITY:
+            monthly_rate = self.rate / 12.0
+            if monthly_rate == 0:
+                return self.outstanding_principal / self.term_months
+            payment = self.outstanding_principal * monthly_rate / (1 - (1 + monthly_rate) ** -self.term_months)
+            return payment
+        else:
+            principal_payment = self.outstanding_principal / self.term_months
+            interest = self.outstanding_principal * self.rate / 12.0
+            return principal_payment + interest
+
+    def apply_payment(self) -> float:
+        if self.outstanding_principal <= 0:
+            return 0.0
+        payment = self.get_monthly_payment()
+        interest = self.outstanding_principal * self.rate / 12.0
+        principal_paid = payment - interest
+        self.outstanding_principal -= principal_paid
+        if self.outstanding_principal < 0:
+            self.outstanding_principal = 0.0
+        return principal_paid
+
+
+def calculate_effective_rate(principal: float, term_months: int, rate: float, is_floating: bool,
+                             schedule: RepaymentSchedule, commission_rate: float) -> float:
+    monthly_rate = rate / 12.0
+    cf0 = principal * (commission_rate - 1.0)
+    cashflows = [cf0]
+    if schedule == RepaymentSchedule.ANNUITY:
+        if monthly_rate > 0:
+            payment = principal * monthly_rate / (1 - (1 + monthly_rate) ** -term_months)
+        else:
+            payment = principal / term_months
+        for t in range(1, term_months + 1):
+            cashflows.append(payment)
+    else:
+        principal_payment = principal / term_months
+        for t in range(1, term_months + 1):
+            interest = (principal - principal_payment * (t - 1)) * monthly_rate
+            cashflows.append(principal_payment + interest)
+    irr_monthly = 0.01
+    for _ in range(100):
+        npv = 0.0
+        dnpv = 0.0
+        for idx, cf in enumerate(cashflows):
+            npv += cf / ((1 + irr_monthly) ** idx)
+            if idx > 0:
+                dnpv -= idx * cf / ((1 + irr_monthly) ** (idx + 1))
+        if abs(npv) < 0.01:
+            break
+        irr_monthly -= npv / dnpv if dnpv != 0 else 0.001
+    return (1 + irr_monthly) ** 12 - 1
+
 
 @dataclass
 class Portfolio:
     loans: List[Deal] = field(default_factory=list)
     deposits: List[Deal] = field(default_factory=list)
+    prepaid_loans: List[Deal] = field(default_factory=list)
 
     def add_loan(self, deal: Deal):
         self.loans.append(deal)
@@ -59,11 +144,22 @@ class Portfolio:
         self.deposits.append(deal)
 
     def remove_matured(self, current_date: datetime):
-        self.loans = [d for d in self.loans if not d.is_matured(current_date)]
+        self.loans = [d for d in self.loans if not d.is_matured(current_date) and d.outstanding_principal > 0]
         self.deposits = [d for d in self.deposits if not d.is_matured(current_date)]
 
+    def apply_prepayments(self, current_date: datetime, base_prob: float = 0.001, rate_factor: float = 0.01):
+        remaining_loans = []
+        for loan in self.loans:
+            effective_rate = loan.rate
+            prob = base_prob + rate_factor * (1 - min(effective_rate / 0.35, 1.0))
+            if random.random() < prob:
+                self.prepaid_loans.append(loan)
+                continue
+            remaining_loans.append(loan)
+        self.loans = remaining_loans
+
     def total_loans(self) -> float:
-        return sum(d.amount for d in self.loans)
+        return sum(d.outstanding_principal for d in self.loans)
 
     def total_deposits(self) -> float:
         return sum(d.amount for d in self.deposits)
@@ -75,27 +171,29 @@ class Portfolio:
         buckets = {"0-90d": 0.0, "90-180d": 0.0, "180-365d": 0.0, ">365d": 0.0}
         for loan in self.loans:
             rem = loan.remaining_term_days(current_date)
+            amt = loan.outstanding_principal
             if rem <= 90:
-                buckets["0-90d"] += loan.amount
+                buckets["0-90d"] += amt
             elif rem <= 180:
-                buckets["90-180d"] += loan.amount
+                buckets["90-180d"] += amt
             elif rem <= 365:
-                buckets["180-365d"] += loan.amount
+                buckets["180-365d"] += amt
             else:
-                buckets[">365d"] += loan.amount
+                buckets[">365d"] += amt
         for dep in self.deposits:
             rem = dep.remaining_term_days(current_date)
+            amt = dep.amount
             if rem <= 90:
-                buckets["0-90d"] -= dep.amount
+                buckets["0-90d"] -= amt
             elif rem <= 180:
-                buckets["90-180d"] -= dep.amount
+                buckets["90-180d"] -= amt
             elif rem <= 365:
-                buckets["180-365d"] -= dep.amount
+                buckets["180-365d"] -= amt
             else:
-                buckets[">365d"] -= dep.amount
+                buckets[">365d"] -= amt
         return buckets
 
-    def weighted_loan_rate(self, key_rate: float, yield_curve) -> float:
+    def weighted_loan_rate(self, key_rate: float) -> float:
         total = self.total_loans()
         if total == 0:
             return 0
@@ -104,8 +202,8 @@ class Portfolio:
             if loan.loan_type == LoanType.FIXED:
                 rate = loan.rate
             else:
-                rate = key_rate + loan.rate  # плавающая = ключевая + спред
-            weighted += loan.amount * rate
+                rate = key_rate + loan.rate
+            weighted += loan.outstanding_principal * rate
         return weighted / total
 
     def weighted_deposit_rate(self) -> float:
@@ -120,17 +218,16 @@ class Portfolio:
 class YieldCurve:
     key_rate: float
     base_spread: float = 0.02
-    term_premium: float = 0.01  # годовая премия за каждый год срока (1%)
+    term_premium: float = 0.01
 
     def rate(self, term_months: int) -> float:
-        """Безрисковая ставка на заданный срок (десятичная дробь)"""
         years = term_months / 12.0
         return self.key_rate + self.term_premium * years + self.base_spread
 
 
 @dataclass
 class KeyRate:
-    current: float = 0.21  # текущая ключевая ставка
+    current: float = 0.21
 
     def set(self, new_rate: float):
         self.current = new_rate
@@ -140,54 +237,49 @@ class KeyRate:
 class PnL:
     total_interest_income: float = 0.0
     total_interest_expense: float = 0.0
+    total_commission_income: float = 0.0
     net_interest_income: float = 0.0
 
-    def accrue_daily(self, portfolio: Portfolio, key_rate: float, yield_curve, days: int = 1):
+    def accrue_daily(self, portfolio: Portfolio, key_rate: float, days: int = 1):
         income = 0.0
         expense = 0.0
         for loan in portfolio.loans:
             if loan.loan_type == LoanType.FIXED:
                 daily_rate = loan.rate / 365
             else:
-                floating_rate = key_rate + loan.rate  # плавающая = ключевая + спред
+                floating_rate = key_rate + loan.rate
                 daily_rate = floating_rate / 365
-            income += loan.amount * daily_rate * days
+            income += loan.outstanding_principal * daily_rate * days
         for dep in portfolio.deposits:
             daily_rate = dep.rate / 365
             expense += dep.amount * daily_rate * days
         self.total_interest_income += income
         self.total_interest_expense += expense
-        self.net_interest_income = self.total_interest_income - self.total_interest_expense
+        self.net_interest_income = self.total_interest_income + self.total_commission_income - self.total_interest_expense
+
+    def add_commission(self, amount: float):
+        self.total_commission_income += amount
+        self.net_interest_income = self.total_interest_income + self.total_commission_income - self.total_interest_expense
 
 
 @dataclass
 class RiskMetrics:
-    var_95: float = 0.0
     nii_sensitivity: float = 0.0
     expected_loss: float = 0.0
 
-    def calculate(self, portfolio: Portfolio, key_rate: float, yield_curve: YieldCurve):
-        # Чувствительность NII через GAP: ΔNII = Σ (GAP_i * 0.01 * средний_срок_в_годах)
+    def calculate(self, portfolio: Portfolio, yield_curve: YieldCurve):
         gap = portfolio.gap_by_remaining_term(datetime.now())
         avg_years = {"0-90d": 45 / 365, "90-180d": 135 / 365, "180-365d": 272 / 365, ">365d": 2.0}
         self.nii_sensitivity = sum(gap[b] * 0.01 * avg_years[b] for b in gap)
-
-        # VaR (упрощённый параметрический, 95%) = 1.65 * σ_rate * |NII_sensitivity| / 0.01
-        # σ_rate годовая ~ 2%
-        sigma_rate = 0.02
-        self.var_95 = 1.65 * sigma_rate * abs(self.nii_sensitivity) / 0.01
-
-        # Кредитный риск: ожидаемые потери EL = Σ (PD * LGD * amount)
         el = 0.0
         for loan in portfolio.loans:
             pd = self._pd_from_pkr(loan.credit_score)
             lgd = 0.45
-            el += pd * lgd * loan.amount
+            el += pd * lgd * loan.outstanding_principal
         self.expected_loss = el
 
     @staticmethod
     def _pd_from_pkr(pkr: int) -> float:
-        """Маппинг ПКР в вероятность дефолта (PD) – примерная шкала"""
         if pkr >= 900:
             return 0.001
         elif pkr >= 700:
@@ -208,7 +300,6 @@ class TimeSnapshot:
     net: float
     gap: Dict[str, float]
     nii: float
-    var: float
     expected_loss: float = 0.0
 
 
