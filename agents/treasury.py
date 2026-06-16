@@ -5,52 +5,66 @@ from utils import write_report
 
 class Treasury(BaseAgent):
     def __init__(self, name: str, portfolio: Portfolio, risk_agent_name: str,
-                 base_rate: float = 0.07):
+                 base_rate: float = 0.07, cost_of_funds: float = 0.05):
         super().__init__(name)
         self.portfolio = portfolio
         self.risk_name = risk_agent_name
         self.base_rate = base_rate
+        self.cost_of_funds = cost_of_funds  # стоимость фондирования для банка
 
     def allowed_deposit_rate(self, amount: float, term_months: int) -> float:
-        """Рассчитывает допустимую ставку привлечения."""
         net = self.portfolio.net_position()
-        # Премия за ликвидность: от -0.01 до +0.03 в зависимости от нетто-позиции
         if net > 0:
             premium = min(0.03, net / (self.portfolio.total_deposits() + 1e-6) * 0.01)
         else:
             premium = -0.01
-        # Премия за срок: 1% за каждый год
         term_premium = 0.01 * (term_months / 12.0)
         rate = self.base_rate + premium + term_premium
         return max(0.01, min(0.20, rate))
+
+    def minimum_loan_rate(self, term_months: int) -> float:
+        """Минимальная ставка, по которой банк готов кредитовать, исходя из стоимости фондирования и премии за срок."""
+        term_premium = 0.01 * (term_months / 12.0)
+        min_rate = self.cost_of_funds + term_premium + 0.02  # маржа 2%
+        return max(0.05, min_rate)  # не ниже 5%
 
     def receive(self, from_agent: str, message: dict):
         msg_type = message.get("type")
         if msg_type == "rate_request":
             amount = message["amount"]
             term = message["term"]
-            allowed = self.allowed_deposit_rate(amount, term)
-            write_report(f"[{self.name}] Ставка для депозита {amount} руб. на {term} мес. = {allowed * 100:.2f}%")
-            self.send(from_agent, {
-                "type": "rate_response",
-                "deal_id": message["deal_id"],
-                "allowed_rate": allowed,
-                "amount": amount,
-                "term": term,
-                "client": message["client"],
-                "credit_score": message.get("credit_score", 500),
-                "current_date": message.get("current_date", datetime.now().isoformat()),
-                "segment": message.get("segment", "mass")
-            })
+            if message.get("purpose") == "loan":
+                # Запрос от кредитного отдела
+                min_rate = self.minimum_loan_rate(term)
+                write_report(f"[{self.name}] Минимальная ставка по кредиту на {term} мес. = {min_rate * 100:.2f}%")
+                self.send(from_agent, {
+                    "type": "rate_response",
+                    "deal_id": message["deal_id"],
+                    "min_rate": min_rate,
+                    "purpose": "loan"
+                })
+            else:
+                # Депозитный запрос
+                allowed = self.allowed_deposit_rate(amount, term)
+                write_report(f"[{self.name}] Ставка для депозита {amount} руб. на {term} мес. = {allowed * 100:.2f}%")
+                self.send(from_agent, {
+                    "type": "rate_response",
+                    "deal_id": message["deal_id"],
+                    "allowed_rate": allowed,
+                    "amount": amount,
+                    "term": term,
+                    "client": message["client"],
+                    "credit_score": message.get("credit_score", 500),
+                    "current_date": message.get("current_date", datetime.now().isoformat()),
+                })
         elif msg_type == "counter_request":
             requested_rate = message["requested_rate"]
             amount = message["amount"]
             term = message["term"]
             allowed = self.allowed_deposit_rate(amount, term)
-            # Разрешаем контрпредложение, если запрошенная ставка не превышает допустимую
             allowed_flag = requested_rate <= allowed
             write_report(
-                f"[{self.name}] Контрпредложение: {requested_rate * 100:.2f}% (допустимо {allowed * 100:.2f}%) – {'разрешено' if allowed_flag else 'отклонено'}")
+                f"[{self.name}] Запрошена встречная ставка {requested_rate * 100:.2f}% (допустимо {allowed * 100:.2f}%) – {'одобрено' if allowed_flag else 'отклонено'}")
             self.send(from_agent, {
                 "type": "counter_response",
                 "allowed": allowed_flag,

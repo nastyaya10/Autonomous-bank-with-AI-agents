@@ -7,7 +7,7 @@ load_dotenv()
 
 from models import (
     Portfolio, MessageBus, LoanType, YieldCurve, KeyRate,
-    PnL, RiskMetrics, TimeSnapshot, ClientSegment, RepaymentSchedule
+    PnL, RiskMetrics, TimeSnapshot, RepaymentSchedule
 )
 from agents import (
     LendingDepartment, CreditClient,
@@ -46,21 +46,15 @@ def run_simulation(simulation_days: int = 365):
     portfolio = Portfolio()
     bus = MessageBus()
 
-    lending = LendingDepartment("LendingDept", portfolio, config_list, pnl,
+    treasury = Treasury("Treasury", portfolio, "RiskAgent", base_rate=0.07)
+    lending = LendingDepartment("LendingDept", portfolio, config_list, pnl, "Treasury",
                                 rate_limit_min=0.10, rate_limit_max=0.35)
-    credit_client_mass = CreditClient("CreditClientMass", config_list, segment=ClientSegment.MASS,
-                                      max_rate_willing=0.15)
-    credit_client_vip = CreditClient("CreditClientVIP", config_list, segment=ClientSegment.VIP, max_rate_willing=0.15)
-    deposit_client_mass = DepositClient("DepositClientMass", config_list, segment=ClientSegment.MASS,
-                                        min_rate_willing=0.10)
-    deposit_client_vip = DepositClient("DepositClientVIP", config_list, segment=ClientSegment.VIP,
-                                       min_rate_willing=0.10)
+    credit_client = CreditClient("CreditClient", config_list, max_rate_willing=0.15)
+    deposit_client = DepositClient("DepositClient", config_list, min_rate_willing=0.10)
     deposit_dept = DepositDepartment("DepositDept", portfolio, "Treasury", "RiskAgent", config_list)
-    treasury = Treasury("Treasury", portfolio, "RiskAgent", base_rate=0.07)  # без LLM
     risk = RiskAgent("RiskAgent", portfolio, config_list)
 
-    for agent in [lending, credit_client_mass, credit_client_vip, deposit_client_mass, deposit_client_vip,
-                  deposit_dept, treasury, risk]:
+    for agent in [lending, credit_client, deposit_dept, deposit_client, treasury, risk]:
         bus.register(agent)
 
     current_date = datetime.now()
@@ -76,16 +70,7 @@ def run_simulation(simulation_days: int = 365):
             write_report(f"--- Изменение ключевой ставки до {key_rate.current * 100:.2f}% ---")
 
         if random.random() < 0.4:
-            if random.random() < 0.2:
-                segment = ClientSegment.VIP
-                client_name_loan = "CreditClientVIP"
-                client_name_deposit = "DepositClientVIP"
-            else:
-                segment = ClientSegment.MASS
-                client_name_loan = "CreditClientMass"
-                client_name_deposit = "DepositClientMass"
-
-            write_report(f"\n--- СДЕЛКА {current_date.strftime('%Y-%m-%d')} (сегмент: {segment.value}) ---")
+            write_report(f"\n--- СДЕЛКА {current_date.strftime('%Y-%m-%d')} ---")
             if random.choice(["loan", "deposit"]) == "loan":
                 amount = random.randint(10000, 500000)
                 term = random.choice([3, 6, 12, 24])
@@ -97,17 +82,16 @@ def run_simulation(simulation_days: int = 365):
                 write_report(
                     f"Инициируем кредит: сумма {amount} руб., срок {term} мес., ПКР={score}, тип={loan_type.value}, "
                     f"график={schedule.value}, комиссия={commission_rate * 100:.1f}%")
-                lending.propose_loan(client_name_loan, amount, term, score, loan_type, current_date,
-                                     risk_free_rate=rf, segment=segment,
-                                     schedule=schedule, commission_rate=commission_rate)
+                lending.propose_loan("CreditClient", amount, term, score, loan_type, current_date,
+                                     risk_free_rate=rf, schedule=schedule, commission_rate=commission_rate)
             else:
                 amount = random.randint(5000, 300000)
                 term = random.choice([1, 3, 6, 12])
                 score = random_credit_score()
                 rf = yield_curve.rate(term)
                 write_report(f"Инициируем депозит: сумма {amount} руб., срок {term} мес., ПКР={score}")
-                deposit_dept.propose_deposit(client_name_deposit, amount, term, score, current_date,
-                                             risk_free_rate=rf, segment=segment)
+                deposit_dept.propose_deposit("DepositClient", amount, term, score, current_date,
+                                             risk_free_rate=rf)
 
         if current_date.day == 1 and current_date != datetime.now():
             total_principal_paid = 0.0
@@ -132,7 +116,6 @@ def run_simulation(simulation_days: int = 365):
         current_gap = portfolio.gap_by_remaining_term(current_date)
         risk_metrics.calculate(portfolio, yield_curve)
 
-        # Вызов RiskAgent только раз в 30 дней (экономия LLM-запросов)
         if (current_date - datetime.now()).days % 30 == 0:
             risk.receive("Main", {
                 "type": "risk_assessment",
@@ -145,13 +128,22 @@ def run_simulation(simulation_days: int = 365):
                 "expected_loss": risk_metrics.expected_loss
             })
 
-            # Стресс-тест (шок +4%)
+            elapsed_days = max(1, (current_date - datetime.now()).days)
+            base_daily_interest = pnl.total_interest_income - pnl.total_interest_expense
+            base_annual_nii = (base_daily_interest / elapsed_days) * 365
+
             shocked_key = key_rate.current + 0.04
-            test_pnl = PnL()
-            test_pnl.accrue_daily(portfolio, shocked_key, days=1)
-            stress_test_results.append((current_date, pnl.net_interest_income, test_pnl.net_interest_income))
-            write_report(
-                f"[StressTest] NII при шоке +4%: базовый {pnl.net_interest_income:.2f}, шок {test_pnl.net_interest_income:.2f}")
+            shocked_pnl = PnL()
+            shocked_pnl.accrue_daily(portfolio, shocked_key, days=1)
+            shocked_daily_interest = shocked_pnl.total_interest_income - shocked_pnl.total_interest_expense
+            shocked_annual_nii = shocked_daily_interest * 365
+
+            change = shocked_annual_nii - base_annual_nii
+            sign = "+" if change >= 0 else ""
+            stress_test_results.append((current_date, base_annual_nii, shocked_annual_nii))
+            write_report(f"[StressTest] Ожидаемый годовой NII: базовый {base_annual_nii:,.2f} руб., "
+                         f"при шоке +4% {shocked_annual_nii:,.2f} руб. "
+                         f"(изменение {sign}{change:,.2f} руб.)")
 
         snapshot = TimeSnapshot(
             date=current_date,

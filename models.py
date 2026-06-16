@@ -23,11 +23,6 @@ class Decision(Enum):
     COUNTER = "counter"
 
 
-class ClientSegment(Enum):
-    MASS = "mass"
-    VIP = "vip"
-
-
 class RepaymentSchedule(Enum):
     ANNUITY = "annuity"
     DIFFERENTIATED = "differentiated"
@@ -46,7 +41,6 @@ class Deal:
     status: str = "active"
     created_at: datetime = field(default_factory=datetime.now)
     maturity_date: Optional[datetime] = None
-    segment: ClientSegment = ClientSegment.MASS
     effective_rate: float = 0.0
     outstanding_principal: float = 0.0
     schedule_type: RepaymentSchedule = RepaymentSchedule.ANNUITY
@@ -61,7 +55,6 @@ class Deal:
                 principal=self.amount,
                 term_months=self.term_months,
                 rate=self.rate,
-                is_floating=(self.loan_type == LoanType.FLOATING),
                 schedule=self.schedule_type,
                 commission_rate=self.commission_rate
             )
@@ -100,7 +93,7 @@ class Deal:
         return principal_paid
 
 
-def calculate_effective_rate(principal: float, term_months: int, rate: float, is_floating: bool,
+def calculate_effective_rate(principal: float, term_months: int, rate: float,
                              schedule: RepaymentSchedule, commission_rate: float) -> float:
     monthly_rate = rate / 12.0
     cf0 = principal * (commission_rate - 1.0)

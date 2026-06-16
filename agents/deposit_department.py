@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from models import Deal, DealType, Decision, Portfolio, ClientSegment
+from models import Deal, DealType, Decision, Portfolio
 from llm_agent import LLMAgent
 from utils import write_report
 
@@ -8,7 +8,7 @@ from utils import write_report
 class DepositDepartment(LLMAgent):
     def __init__(self, name: str, portfolio: Portfolio, treasury_name: str,
                  risk_name: str, config_list: list):
-        system_prompt = """Ты — Принимающее отделение (депозиты). Ты передаёшь сообщения между клиентом и казначейством."""
+        system_prompt = """Ты — депозитное отделение. Передаёшь сообщения между клиентом и казначейством."""
         super().__init__(name, config_list, system_prompt)
         self.portfolio = portfolio
         self.treasury_name = treasury_name
@@ -16,10 +16,10 @@ class DepositDepartment(LLMAgent):
 
     def propose_deposit(self, client_name: str, amount: float, term_months: int,
                         credit_score: int, current_date: datetime,
-                        risk_free_rate: float = None, segment: ClientSegment = ClientSegment.MASS) -> str:
+                        risk_free_rate: float = None) -> str:
         deal_id = str(uuid.uuid4())
         write_report(
-            f"[{self.name}] Запрашиваю у Казначейства ставку для депозита: {amount} руб., {term_months} мес., ПКР={credit_score}, {segment.value}")
+            f"[{self.name}] Запрашиваю ставку для депозита: {amount} руб., {term_months} мес., ПКР={credit_score}")
         msg = {
             "type": "rate_request",
             "deal_id": deal_id,
@@ -28,7 +28,6 @@ class DepositDepartment(LLMAgent):
             "client": client_name,
             "credit_score": credit_score,
             "current_date": current_date.isoformat(),
-            "segment": segment.value
         }
         if risk_free_rate is not None:
             msg["risk_free_rate"] = risk_free_rate
@@ -40,9 +39,7 @@ class DepositDepartment(LLMAgent):
         if msg_type == "rate_response":
             current_date = datetime.fromisoformat(message.get("current_date", datetime.now().isoformat()))
             rf = message.get("risk_free_rate", None)
-            segment = ClientSegment(message.get("segment", "mass"))
-            write_report(
-                f"[{self.name}] Получил от Казначейства ставку {message['allowed_rate'] * 100:.2f}%. Отправляю предложение клиенту {message['client']}")
+            write_report(f"[{self.name}] Получена ставка {message['allowed_rate'] * 100:.2f}%. Отправляю клиенту.")
             dep_msg = {
                 "type": "deposit_proposal",
                 "deal_id": message["deal_id"],
@@ -51,7 +48,6 @@ class DepositDepartment(LLMAgent):
                 "rate": message["allowed_rate"],
                 "credit_score": message.get("credit_score"),
                 "current_date": current_date.isoformat(),
-                "segment": segment.value
             }
             if rf is not None:
                 dep_msg["risk_free_rate"] = rf
@@ -60,67 +56,46 @@ class DepositDepartment(LLMAgent):
             deal_id = message["deal_id"]
             decision = message["decision"]
             current_date = datetime.fromisoformat(message.get("current_date", datetime.now().isoformat()))
-            segment = ClientSegment(message.get("segment", "mass"))
             if decision == Decision.ACCEPT:
-                deal = Deal(
-                    deal_id=deal_id,
-                    type=DealType.DEPOSIT,
-                    amount=message["amount"],
-                    term_months=message["term"],
-                    rate=message["rate"],
-                    client_id=from_agent,
-                    credit_score=message.get("credit_score", 500),
-                    status="active",
-                    created_at=current_date,
-                    segment=segment
-                )
-                self.portfolio.add_deposit(deal)
-                write_report(
-                    f"[{self.name}] Депозит {deal_id[:8]} принят: {deal.amount} руб. на {deal.term_months} мес. под {deal.rate * 100:.2f}%")
-                self.send(from_agent, {"type": "deal_confirmed", "deal_id": deal_id})
-                self.send(self.treasury_name, {"type": "portfolio_updated", "current_date": current_date.isoformat()})
-            elif decision == Decision.REJECT:
-                write_report(f"[{self.name}] Клиент {from_agent} отклонил депозит {deal_id[:8]}")
+                self._create_deposit(message, from_agent, current_date, rate=message["rate"])
             elif decision == Decision.COUNTER:
-                if segment != ClientSegment.VIP:
-                    write_report(f"[{self.name}] Массовый клиент не может торговаться, игнорируем")
-                    self.send(from_agent, {"type": "reject_counter", "deal_id": deal_id})
-                    return
-                write_report(
-                    f"[{self.name}] VIP-клиент {from_agent} предлагает контрставку {message['counter_rate'] * 100:.2f}% по депозиту {deal_id[:8]}")
+                # Запрашиваем казначейство о допустимости встречной ставки
+                write_report(f"[{self.name}] Клиент предлагает встречную ставку {message['counter_rate'] * 100:.2f}%")
                 self.send(self.treasury_name, {
                     "type": "counter_request",
                     "deal_id": deal_id,
                     "amount": message["amount"],
                     "term": message["term"],
-                    "client": from_agent,
                     "requested_rate": message["counter_rate"],
+                    "client": from_agent,
                     "credit_score": message.get("credit_score"),
                     "current_date": current_date.isoformat(),
                 })
+            else:
+                write_report(f"[{self.name}] Клиент {from_agent} отклонил депозит {deal_id[:8]}")
         elif msg_type == "counter_response":
             current_date = datetime.fromisoformat(message.get("current_date", datetime.now().isoformat()))
             if message["allowed"]:
-                deal = Deal(
-                    deal_id=message["deal_id"],
-                    type=DealType.DEPOSIT,
-                    amount=message["amount"],
-                    term_months=message["term"],
-                    rate=message["rate"],
-                    client_id=message["client"],
-                    credit_score=message.get("credit_score", 500),
-                    status="active",
-                    created_at=current_date,
-                    segment=ClientSegment.VIP
-                )
-                self.portfolio.add_deposit(deal)
-                write_report(
-                    f"[{self.name}] Депозит {message['deal_id'][:8]} принят после контрпредложения под {message['rate'] * 100:.2f}%")
-                self.send(message["client"], {"type": "deal_confirmed", "deal_id": message["deal_id"]})
-                self.send(self.treasury_name, {"type": "portfolio_updated", "current_date": current_date.isoformat()})
+                write_report(f"[{self.name}] Казначейство одобрило встречную ставку {message['rate'] * 100:.2f}%")
+                self._create_deposit(message, message["client"], current_date, rate=message["rate"])
             else:
-                write_report(
-                    f"[{self.name}] Казначейство отклонило контрпредложение по депозиту {message['deal_id'][:8]}")
-                client = message.get("client")
-                if client:
-                    self.send(client, {"type": "reject_counter", "deal_id": message["deal_id"]})
+                write_report(f"[{self.name}] Казначейство отклонило встречную ставку")
+                self.send(message["client"], {"type": "reject_counter", "deal_id": message["deal_id"]})
+
+    def _create_deposit(self, message, client_name, current_date, rate):
+        deal = Deal(
+            deal_id=message["deal_id"],
+            type=DealType.DEPOSIT,
+            amount=message["amount"],
+            term_months=message["term"],
+            rate=rate,
+            client_id=client_name,
+            credit_score=message.get("credit_score", 500),
+            status="active",
+            created_at=current_date,
+        )
+        self.portfolio.add_deposit(deal)
+        write_report(
+            f"[{self.name}] Депозит {deal.deal_id[:8]} принят: {deal.amount} руб. на {deal.term_months} мес. под {deal.rate * 100:.2f}%")
+        self.send(client_name, {"type": "deal_confirmed", "deal_id": deal.deal_id})
+        self.send(self.treasury_name, {"type": "portfolio_updated", "current_date": current_date.isoformat()})
