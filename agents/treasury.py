@@ -5,12 +5,12 @@ from utils import write_report
 
 class Treasury(BaseAgent):
     def __init__(self, name: str, portfolio: Portfolio, risk_agent_name: str,
-                 base_rate: float = 0.07, cost_of_funds: float = 0.05):
+                 base_rate: float = 0.15, cost_of_funds: float = 0.05):
         super().__init__(name)
         self.portfolio = portfolio
         self.risk_name = risk_agent_name
         self.base_rate = base_rate
-        self.cost_of_funds = cost_of_funds  # стоимость фондирования для банка
+        self.cost_of_funds = cost_of_funds
 
     def allowed_deposit_rate(self, amount: float, term_months: int) -> float:
         net = self.portfolio.net_position()
@@ -23,10 +23,9 @@ class Treasury(BaseAgent):
         return max(0.01, min(0.20, rate))
 
     def minimum_loan_rate(self, term_months: int) -> float:
-        """Минимальная ставка, по которой банк готов кредитовать, исходя из стоимости фондирования и премии за срок."""
         term_premium = 0.01 * (term_months / 12.0)
-        min_rate = self.cost_of_funds + term_premium + 0.02  # маржа 2%
-        return max(0.05, min_rate)  # не ниже 5%
+        min_rate = self.cost_of_funds + term_premium + 0.02
+        return max(0.05, min_rate)
 
     def receive(self, from_agent: str, message: dict):
         msg_type = message.get("type")
@@ -34,7 +33,6 @@ class Treasury(BaseAgent):
             amount = message["amount"]
             term = message["term"]
             if message.get("purpose") == "loan":
-                # Запрос от кредитного отдела
                 min_rate = self.minimum_loan_rate(term)
                 write_report(f"[{self.name}] Минимальная ставка по кредиту на {term} мес. = {min_rate * 100:.2f}%")
                 self.send(from_agent, {
@@ -44,7 +42,6 @@ class Treasury(BaseAgent):
                     "purpose": "loan"
                 })
             else:
-                # Депозитный запрос
                 allowed = self.allowed_deposit_rate(amount, term)
                 write_report(f"[{self.name}] Ставка для депозита {amount} руб. на {term} мес. = {allowed * 100:.2f}%")
                 self.send(from_agent, {

@@ -13,15 +13,13 @@ def plot_time_series(snapshots):
     dates = [s.date for s in snapshots]
     loans = [s.loans for s in snapshots]
     deposits = [s.deposits for s in snapshots]
-    net = [s.net for s in snapshots]
     nii = [s.nii for s in snapshots]
     el = [s.expected_loss for s in snapshots]
 
-    # График портфеля
+    # График портфеля (без нетто-позиции)
     plt.figure(figsize=(12, 6))
     plt.plot(dates, loans, label="Кредиты", marker='.', linestyle='-')
     plt.plot(dates, deposits, label="Депозиты", marker='.', linestyle='-')
-    plt.plot(dates, net, label="Нетто-позиция", linestyle='--')
     plt.title("Эволюция портфеля во времени")
     plt.xlabel("Дата")
     plt.ylabel("Сумма, руб.")
@@ -33,7 +31,7 @@ def plot_time_series(snapshots):
     plt.savefig("plots/portfolio_evolution.png")
     plt.close()
 
-    # График GAP
+    # График GAP (stacked area)
     buckets = ["0-90d", "90-180d", "180-365d", ">365d"]
     gap_data = {b: [] for b in buckets}
     for s in snapshots:
@@ -52,7 +50,7 @@ def plot_time_series(snapshots):
     plt.savefig("plots/gap_evolution.png")
     plt.close()
 
-    # График NII и ожидаемых потерь
+    # График NII и EL
     plt.figure(figsize=(12, 6))
     plt.plot(dates, nii, label="NII (накопленный)", color='green')
     plt.plot(dates, el, label="Ожидаемые потери (EL)", color='orange', linestyle='-.')
@@ -125,3 +123,21 @@ def plot_stress_test(stress_dates, base_nii, shocked_nii):
     plt.savefig("plots/stress_test_nii.png")
     plt.close()
     print("График стресс-теста сохранён в 'plots/stress_test_nii.png'")
+
+
+def plot_gap_barchart(gap: dict):
+    """Bar chart GAP по срочностям на последний день."""
+    setup_plots_dir()
+    buckets = list(gap.keys())
+    values = list(gap.values())
+    colors = ['green' if v >= 0 else 'red' for v in values]
+    plt.figure(figsize=(8, 5))
+    plt.bar(buckets, values, color=colors)
+    plt.title("GAP по срочностям (на конец периода)")
+    plt.xlabel("Срок")
+    plt.ylabel("GAP, руб.")
+    plt.grid(True, axis='y')
+    plt.tight_layout()
+    plt.savefig("plots/gap_barchart.png")
+    plt.close()
+    print("Bar chart GAP сохранён в 'plots/gap_barchart.png'")

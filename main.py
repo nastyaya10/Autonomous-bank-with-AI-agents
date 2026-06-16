@@ -15,7 +15,10 @@ from agents import (
     Treasury, RiskAgent
 )
 from utils import write_report
-from visualizer import plot_time_series, plot_deposit_rates, plot_stress_test
+from visualizer import (
+    plot_time_series, plot_deposit_rates,
+    plot_stress_test, plot_gap_barchart
+)
 
 api_key = os.getenv('OPENAI_API_KEY') or os.getenv('AIPIPE_TOKEN')
 if not api_key:
@@ -46,7 +49,8 @@ def run_simulation(simulation_days: int = 365):
     portfolio = Portfolio()
     bus = MessageBus()
 
-    treasury = Treasury("Treasury", portfolio, "RiskAgent", base_rate=0.07)
+    # Повышенная базовая ставка казначейства для сближения с ОФЗ
+    treasury = Treasury("Treasury", portfolio, "RiskAgent", base_rate=0.15)
     lending = LendingDepartment("LendingDept", portfolio, config_list, pnl, "Treasury",
                                 rate_limit_min=0.10, rate_limit_max=0.35)
     credit_client = CreditClient("CreditClient", config_list, max_rate_willing=0.15)
@@ -70,28 +74,34 @@ def run_simulation(simulation_days: int = 365):
             write_report(f"--- Изменение ключевой ставки до {key_rate.current * 100:.2f}% ---")
 
         if random.random() < 0.4:
-            write_report(f"\n--- СДЕЛКА {current_date.strftime('%Y-%m-%d')} ---")
-            if random.choice(["loan", "deposit"]) == "loan":
-                amount = random.randint(10000, 500000)
-                term = random.choice([3, 6, 12, 24])
-                score = random_credit_score()
-                loan_type = random.choice([LoanType.FIXED, LoanType.FLOATING])
-                schedule = random.choice([RepaymentSchedule.ANNUITY, RepaymentSchedule.DIFFERENTIATED])
-                commission_rate = random.uniform(0, 0.02)
-                rf = yield_curve.rate(term)
+            # Балансировка: не выдаём кредиты, если левередж > 3
+            leverage = portfolio.total_loans() / (portfolio.total_deposits() + 1)
+            if leverage > 3.0:
                 write_report(
-                    f"Инициируем кредит: сумма {amount} руб., срок {term} мес., ПКР={score}, тип={loan_type.value}, "
-                    f"график={schedule.value}, комиссия={commission_rate * 100:.1f}%")
-                lending.propose_loan("CreditClient", amount, term, score, loan_type, current_date,
-                                     risk_free_rate=rf, schedule=schedule, commission_rate=commission_rate)
+                    f"[Balancing] Кредиты ({portfolio.total_loans():,.0f}) более чем в 3 раза превышают депозиты ({portfolio.total_deposits():,.0f}), кредитование приостановлено.")
             else:
-                amount = random.randint(5000, 300000)
-                term = random.choice([1, 3, 6, 12])
-                score = random_credit_score()
-                rf = yield_curve.rate(term)
-                write_report(f"Инициируем депозит: сумма {amount} руб., срок {term} мес., ПКР={score}")
-                deposit_dept.propose_deposit("DepositClient", amount, term, score, current_date,
-                                             risk_free_rate=rf)
+                write_report(f"\n--- СДЕЛКА {current_date.strftime('%Y-%m-%d')} ---")
+                if random.choice(["loan", "deposit"]) == "loan":
+                    amount = random.randint(10000, 500000)
+                    term = random.choice([3, 6, 12, 24])
+                    score = random_credit_score()
+                    loan_type = random.choice([LoanType.FIXED, LoanType.FLOATING])
+                    schedule = random.choice([RepaymentSchedule.ANNUITY, RepaymentSchedule.DIFFERENTIATED])
+                    commission_rate = random.uniform(0, 0.02)
+                    rf = yield_curve.rate(term)
+                    write_report(
+                        f"Инициируем кредит: сумма {amount} руб., срок {term} мес., ПКР={score}, тип={loan_type.value}, "
+                        f"график={schedule.value}, комиссия={commission_rate * 100:.1f}%")
+                    lending.propose_loan("CreditClient", amount, term, score, loan_type, current_date,
+                                         risk_free_rate=rf, schedule=schedule, commission_rate=commission_rate)
+                else:
+                    amount = random.randint(5000, 300000)
+                    term = random.choice([1, 3, 6, 12])
+                    score = random_credit_score()
+                    rf = yield_curve.rate(term)
+                    write_report(f"Инициируем депозит: сумма {amount} руб., срок {term} мес., ПКР={score}")
+                    deposit_dept.propose_deposit("DepositClient", amount, term, score, current_date,
+                                                 risk_free_rate=rf)
 
         if current_date.day == 1 and current_date != datetime.now():
             total_principal_paid = 0.0
@@ -184,6 +194,9 @@ def run_simulation(simulation_days: int = 365):
     if stress_test_results:
         dates_stress, base_nii_vals, shocked_nii_vals = zip(*stress_test_results)
         plot_stress_test(dates_stress, base_nii_vals, shocked_nii_vals)
+    # Дополнительный bar chart GAP на конец периода
+    final_gap = portfolio.gap_by_remaining_term(end_date)
+    plot_gap_barchart(final_gap)
 
 
 if __name__ == "__main__":
