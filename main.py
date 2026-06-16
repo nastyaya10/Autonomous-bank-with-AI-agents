@@ -57,12 +57,11 @@ def run_simulation(simulation_days: int = 365):
     portfolio = Portfolio()
     bus = MessageBus()
 
-    # Treasury с дисконтом 3% для депозитов
+    # Параметры клиентов адаптированы под привязку к ОФЗ
     treasury = Treasury("Treasury", portfolio, "RiskAgent", deposit_discount=0.03)
-    # LendingDepartment – ставки зависят только от ОФЗ и ПКР
     lending = LendingDepartment("LendingDept", portfolio, config_list, pnl, "Treasury")
-    credit_client = CreditClient("CreditClient", config_list, max_rate_willing=0.20)
-    deposit_client = DepositClient("DepositClient", config_list, min_rate_willing=0.10)
+    credit_client = CreditClient("CreditClient", config_list, max_rate_willing=0.30)  # было 0.20
+    deposit_client = DepositClient("DepositClient", config_list, min_rate_willing=0.12)  # было 0.10
     deposit_dept = DepositDepartment("DepositDept", portfolio, "Treasury", "RiskAgent", config_list)
     risk = RiskAgent("RiskAgent", portfolio, config_list)
 
@@ -79,7 +78,6 @@ def run_simulation(simulation_days: int = 365):
         if (current_date - datetime(2026, 1, 1)).days % 60 == 0 and current_date != datetime(2026, 1, 1):
             key_rate.set(key_rate.current + 0.005)
 
-        # Динамическая балансировка
         leverage = portfolio.total_loans() / (portfolio.total_deposits() + 1)
         credit_prob = max(0.1, 0.4 - 0.05 * (leverage - 1))
         deposit_prob = 0.4
@@ -110,7 +108,6 @@ def run_simulation(simulation_days: int = 365):
                     write_report(f"Инициируем депозит: сумма {amount} руб., срок {term} мес., ПКР={score}")
                     deposit_dept.propose_deposit("DepositClient", amount, term, score, current_date, risk_free_rate=rf)
 
-        # Ежемесячные платежи
         if current_date.day == 1 and (current_date - datetime(2026, 1, 1)).days >= 30:
             total_principal_paid = 0.0
             for loan in portfolio.loans:
