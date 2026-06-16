@@ -57,12 +57,17 @@ def run_simulation(simulation_days: int = 365):
     portfolio = Portfolio()
     bus = MessageBus()
 
-    # Параметры клиентов адаптированы под привязку к ОФЗ
+    # Списки для хранения всех когда‑либо выданных кредитов и депозитов
+    all_loans = []
+    all_deposits = []
+
     treasury = Treasury("Treasury", portfolio, "RiskAgent", deposit_discount=0.03)
-    lending = LendingDepartment("LendingDept", portfolio, config_list, pnl, "Treasury")
-    credit_client = CreditClient("CreditClient", config_list, max_rate_willing=0.30)  # было 0.20
-    deposit_client = DepositClient("DepositClient", config_list, min_rate_willing=0.12)  # было 0.10
-    deposit_dept = DepositDepartment("DepositDept", portfolio, "Treasury", "RiskAgent", config_list)
+    lending = LendingDepartment("LendingDept", portfolio, config_list, pnl, "Treasury",
+                                all_loans=all_loans)  # передаём список для сохранения кредитов
+    credit_client = CreditClient("CreditClient", config_list, max_rate_willing=0.30)
+    deposit_client = DepositClient("DepositClient", config_list, min_rate_willing=0.12)
+    deposit_dept = DepositDepartment("DepositDept", portfolio, "Treasury", "RiskAgent", config_list,
+                                     all_deposits=all_deposits)  # передаём список для сохранения депозитов
     risk = RiskAgent("RiskAgent", portfolio, config_list)
 
     for agent in [lending, credit_client, deposit_dept, deposit_client, treasury, risk]:
@@ -196,7 +201,8 @@ def run_simulation(simulation_days: int = 365):
     write_report(f"Итоговые ожидаемые потери: {risk_metrics.expected_loss:.2f} руб.")
 
     plot_time_series(snapshots)
-    plot_rates_vs_curve(yield_curve, portfolio)
+    # Передаём полные списки всех сделок за всё время
+    plot_rates_vs_curve(yield_curve, all_loans, all_deposits)
     if stress_test_results:
         dates_stress, base_nii_vals, shocked_nii_vals = zip(*stress_test_results)
         plot_stress_test(dates_stress, base_nii_vals, shocked_nii_vals)

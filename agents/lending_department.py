@@ -7,12 +7,13 @@ from utils import write_report
 
 class LendingDepartment(LLMAgent):
     def __init__(self, name: str, portfolio: Portfolio, config_list: list,
-                 pnl: PnL, treasury_name: str):
-        system_prompt = """Ты — кредитный департамент. Предлагаешь ставку, зависящую от безрисковой кривой и ПКР."""
+                 pnl: PnL, treasury_name: str, all_loans: list = None):
+        system_prompt = """Ты — кредитный департамент."""
         super().__init__(name, config_list, system_prompt)
         self.portfolio = portfolio
         self.pnl = pnl
         self.treasury_name = treasury_name
+        self.all_loans = all_loans if all_loans is not None else []
         self.pending_loans = {}
 
     def propose_loan(self, client_name: str, amount: float, term_months: int,
@@ -21,9 +22,8 @@ class LendingDepartment(LLMAgent):
                      schedule: RepaymentSchedule = RepaymentSchedule.ANNUITY,
                      commission_rate: float = 0.0) -> str:
         deal_id = str(uuid.uuid4())
-
         norm = (credit_score - 1) / 998
-        credit_spread = 0.05 - 0.02 * norm  # 5% для низкого ПКР, 3% для высокого
+        credit_spread = 0.05 - 0.02 * norm
         proposed_rate = risk_free_rate + credit_spread
         proposed_rate = min(proposed_rate, 0.50)
 
@@ -33,7 +33,7 @@ class LendingDepartment(LLMAgent):
             "current_date": current_date, "risk_free_rate": risk_free_rate,
             "schedule": schedule, "commission_rate": commission_rate,
             "proposed_rate": proposed_rate,
-            "min_rate": None  # будет заполнен после ответа казначейства
+            "min_rate": None
         }
 
         self.send(self.treasury_name, {
@@ -70,13 +70,11 @@ class LendingDepartment(LLMAgent):
             }
 
             write_report(
-                f"[{self.name}] Предлагаю кредит {info['amount']} руб. на {info['term']} мес. под {proposed_rate * 100:.2f}% (ПКР={info['credit_score']}, ОФЗ={info['risk_free_rate'] * 100:.2f}%)")
+                f"[{self.name}] Предлагаю кредит {info['amount']} руб. на {info['term']} мес. под {proposed_rate * 100:.2f}%")
             self.send(info["client_name"], msg_to_client)
 
         elif msg_type == "client_response":
             deal_id = message["deal_id"]
-            # Ищем информацию в pending_loans (может быть ещё там, если не удалена)
-            # Удаляем, если найдём, но сначала сохраним min_rate
             info = self.pending_loans.pop(deal_id, None)
             decision = message["decision"]
             current_date = datetime.fromisoformat(message.get("current_date", datetime.now().isoformat()))
@@ -87,7 +85,6 @@ class LendingDepartment(LLMAgent):
                 self._create_deal(message, from_agent, current_date, schedule, commission_rate, rate=message["rate"])
             elif decision == Decision.COUNTER:
                 client_rate = message["counter_rate"]
-                # Проверяем минимальную ставку от Treasury
                 min_rate = info["min_rate"] if info else 0.0
                 if client_rate >= min_rate:
                     write_report(f"[{self.name}] Принимаем встречную ставку: {client_rate * 100:.2f}%")
@@ -115,6 +112,7 @@ class LendingDepartment(LLMAgent):
             commission_rate=commission_rate
         )
         self.portfolio.add_loan(deal)
+        self.all_loans.append(deal)  # сохраняем для графика
         if commission_rate > 0:
             commission_amount = deal.amount * commission_rate
             self.pnl.add_commission(commission_amount)

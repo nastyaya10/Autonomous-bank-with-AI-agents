@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import os
-from models import RealYieldCurve, Portfolio
+from models import RealYieldCurve
 
 
 def setup_plots_dir():
@@ -16,7 +16,6 @@ def plot_time_series(snapshots):
     nii = [s.nii for s in snapshots]
     el = [s.expected_loss for s in snapshots]
 
-    # График портфеля (кредиты и депозиты)
     plt.figure(figsize=(12, 6))
     plt.plot(dates, loans, label="Кредиты", marker='.', linestyle='-')
     plt.plot(dates, deposits, label="Депозиты", marker='.', linestyle='-')
@@ -31,7 +30,6 @@ def plot_time_series(snapshots):
     plt.savefig("plots/portfolio_evolution.png")
     plt.close()
 
-    # График GAP (stacked area)
     buckets = ["0-90d", "90-180d", "180-365d", ">365d"]
     gap_data = {b: [] for b in buckets}
     for s in snapshots:
@@ -50,7 +48,6 @@ def plot_time_series(snapshots):
     plt.savefig("plots/gap_evolution.png")
     plt.close()
 
-    # График ЧПД (NII)
     plt.figure(figsize=(12, 6))
     plt.plot(dates, nii, label="ЧПД (накопленный)", color='green')
     plt.title("Чистый процентный доход (ЧПД) во времени")
@@ -64,7 +61,6 @@ def plot_time_series(snapshots):
     plt.savefig("plots/nii.png")
     plt.close()
 
-    # График ожидаемых потерь (EL)
     plt.figure(figsize=(12, 6))
     plt.plot(dates, el, label="Ожидаемые потери (EL)", color='orange', linestyle='-.')
     plt.title("Ожидаемые потери (EL) во времени")
@@ -81,15 +77,11 @@ def plot_time_series(snapshots):
     print("Все графики сохранены в папку 'plots/'")
 
 
-def plot_rates_vs_curve(yield_curve, portfolio: Portfolio):
-    """График ставок (депозитов и кредитов) относительно кривой ОФЗ."""
+def plot_rates_vs_curve(yield_curve, loans: list, deposits: list):
+    """График ставок (кредитов и депозитов) относительно кривой ОФЗ."""
     setup_plots_dir()
-    deposits = portfolio.deposits
-    loans = portfolio.loans
-
     dep_terms = [d.term_months for d in deposits]
     dep_rates = [d.rate * 100 for d in deposits]
-
     loan_terms = [l.term_months for l in loans]
     loan_rates = [l.rate * 100 for l in loans]
 
@@ -99,10 +91,10 @@ def plot_rates_vs_curve(yield_curve, portfolio: Portfolio):
     plt.figure(figsize=(10, 6))
     plt.plot(all_terms, yc_rates, 'r-', linewidth=2, label='Кривая ОФЗ')
     if dep_terms:
-        plt.scatter(dep_terms, dep_rates, color='blue', alpha=0.6, label='Депозитные ставки')
+        plt.scatter(dep_terms, dep_rates, color='blue', alpha=0.4, label='Депозитные ставки')
     if loan_terms:
-        plt.scatter(loan_terms, loan_rates, color='green', alpha=0.6, marker='s', label='Кредитные ставки')
-    plt.title("Ставки банка vs кривая ОФЗ")
+        plt.scatter(loan_terms, loan_rates, color='green', alpha=0.4, marker='s', label='Кредитные ставки')
+    plt.title("Ставки банка vs кривая ОФЗ (все сделки)")
     plt.xlabel("Срок, мес.")
     plt.ylabel("Ставка, % годовых")
     plt.legend()
@@ -132,7 +124,6 @@ def plot_stress_test(stress_dates, base_nii, shocked_nii):
 
 
 def plot_gap_barchart(gap: dict):
-    """Bar chart GAP по срочностям на последний день."""
     setup_plots_dir()
     buckets = list(gap.keys())
     values = list(gap.values())
