@@ -7,28 +7,28 @@ from utils import write_report
 
 class LendingDepartment(LLMAgent):
     def __init__(self, name: str, portfolio: Portfolio, config_list: list,
-                 pnl: PnL, treasury_name: str,
-                 rate_limit_min: float = 0.10, rate_limit_max: float = 0.35):
-        system_prompt = f"""Ты — кредитный департамент. Лимиты ставок: {rate_limit_min * 100:.2f}%–{rate_limit_max * 100:.2f}%."""
+                 pnl: PnL, treasury_name: str):
+        system_prompt = """Ты — кредитный департамент. Предлагаешь ставку, зависящую от безрисковой кривой и ПКР."""
         super().__init__(name, config_list, system_prompt)
         self.portfolio = portfolio
         self.pnl = pnl
         self.treasury_name = treasury_name
-        self.rate_limit_min = rate_limit_min
-        self.rate_limit_max = rate_limit_max
-        self.pending_loans = {}  # deal_id -> параметры до ответа казначейства
+        self.pending_loans = {}
 
     def propose_loan(self, client_name: str, amount: float, term_months: int,
                      credit_score: int, loan_type: LoanType, current_date: datetime,
-                     risk_free_rate: float = None,
+                     risk_free_rate: float,  # ОФЗ на этот срок
                      schedule: RepaymentSchedule = RepaymentSchedule.ANNUITY,
                      commission_rate: float = 0.0) -> str:
         deal_id = str(uuid.uuid4())
-        norm = (credit_score - 1) / 998
-        proposed_rate = self.rate_limit_min + (self.rate_limit_max - self.rate_limit_min) * (1 - norm)
-        proposed_rate = round(max(self.rate_limit_min, min(self.rate_limit_max, proposed_rate)), 4)
 
-        # Сохраняем контекст и запрашиваем казначейство о минимальной ставке
+        # Кредитная премия: от 0.03 (высокий ПКР) до 0.05 (низкий ПКР)
+        norm = (credit_score - 1) / 998
+        credit_spread = 0.05 - 0.02 * norm  # 5% → 3%
+        proposed_rate = risk_free_rate + credit_spread
+        # Ограничиваем сверху, чтобы не улететь за 50%
+        proposed_rate = min(proposed_rate, 0.50)
+
         self.pending_loans[deal_id] = {
             "client_name": client_name, "amount": amount, "term": term_months,
             "credit_score": credit_score, "loan_type": loan_type,
@@ -36,6 +36,8 @@ class LendingDepartment(LLMAgent):
             "schedule": schedule, "commission_rate": commission_rate,
             "proposed_rate": proposed_rate
         }
+
+        # Запрашиваем у Treasury минимальную ставку (для проверки)
         self.send(self.treasury_name, {
             "type": "rate_request",
             "deal_id": deal_id,
@@ -47,24 +49,14 @@ class LendingDepartment(LLMAgent):
 
     def receive(self, from_agent: str, message: dict):
         msg_type = message.get("type")
-        # Ответ от казначейства по кредитной ставке
         if msg_type == "rate_response" and message.get("purpose") == "loan":
             deal_id = message["deal_id"]
             info = self.pending_loans.pop(deal_id, None)
             if not info:
                 return
             min_rate = message["min_rate"]
-            proposed_rate = info["proposed_rate"]
-            # Корректируем ставку, если она ниже минимальной
-            if proposed_rate < min_rate:
-                proposed_rate = min_rate
-                if proposed_rate > self.rate_limit_max:
-                    write_report(
-                        f"[{self.name}] Ставка {proposed_rate * 100:.2f}% выше лимита, кредит не может быть выдан")
-                    return
-                info["proposed_rate"] = proposed_rate
+            proposed_rate = max(info["proposed_rate"], min_rate)
 
-            # Отправляем предложение клиенту
             msg_to_client = {
                 "type": "loan_proposal",
                 "deal_id": deal_id,
@@ -75,16 +67,14 @@ class LendingDepartment(LLMAgent):
                 "loan_type": info["loan_type"].value,
                 "current_date": info["current_date"].isoformat(),
                 "schedule": info["schedule"].value,
-                "commission_rate": info["commission_rate"]
+                "commission_rate": info["commission_rate"],
+                "risk_free_rate": info["risk_free_rate"]
             }
-            if info["risk_free_rate"] is not None:
-                msg_to_client["risk_free_rate"] = info["risk_free_rate"]
 
             write_report(
-                f"[{self.name}] Предлагаю кредит {info['amount']} руб. на {info['term']} мес. под {proposed_rate * 100:.2f}% (ПКР={info['credit_score']})")
+                f"[{self.name}] Предлагаю кредит {info['amount']} руб. на {info['term']} мес. под {proposed_rate * 100:.2f}% (ПКР={info['credit_score']}, ОФЗ={info['risk_free_rate'] * 100:.2f}%)")
             self.send(info["client_name"], msg_to_client)
 
-        # Ответ от клиента
         elif msg_type == "client_response":
             deal_id = message["deal_id"]
             decision = message["decision"]
@@ -96,12 +86,9 @@ class LendingDepartment(LLMAgent):
                 self._create_deal(message, from_agent, current_date, schedule, commission_rate, rate=message["rate"])
             elif decision == Decision.COUNTER:
                 client_rate = message["counter_rate"]
-                if self.rate_limit_min <= client_rate <= self.rate_limit_max:
-                    write_report(f"[{self.name}] Принимаем встречную ставку: {client_rate * 100:.2f}%")
-                    self._create_deal(message, from_agent, current_date, schedule, commission_rate, rate=client_rate)
-                else:
-                    write_report(f"[{self.name}] Отклоняем встречную ставку {client_rate * 100:.2f}% (вне лимитов)")
-                    self.send(from_agent, {"type": "reject_counter", "deal_id": deal_id})
+                # Проверяем, что встречная ставка не ниже минимальной (казначейство уже проверило)
+                write_report(f"[{self.name}] Принимаем встречную ставку: {client_rate * 100:.2f}%")
+                self._create_deal(message, from_agent, current_date, schedule, commission_rate, rate=client_rate)
             else:
                 write_report(f"[{self.name}] Клиент {from_agent} отклонил кредит {deal_id[:8]}")
 

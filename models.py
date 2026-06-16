@@ -5,6 +5,8 @@ from enum import Enum
 from datetime import datetime, timedelta
 import random
 import math
+import csv
+import os
 
 
 class DealType(Enum):
@@ -207,15 +209,51 @@ class Portfolio:
         return weighted / total
 
 
-@dataclass
 class YieldCurve:
-    key_rate: float
-    base_spread: float = 0.02
-    term_premium: float = 0.01
+    """Старая упрощённая модель (используется, если нет реальных данных)."""
+
+    def __init__(self, key_rate: float, base_spread: float = 0.02, term_premium: float = 0.01):
+        self.key_rate = key_rate
+        self.base_spread = base_spread
+        self.term_premium = term_premium
 
     def rate(self, term_months: int) -> float:
         years = term_months / 12.0
         return self.key_rate + self.term_premium * years + self.base_spread
+
+
+class RealYieldCurve:
+    """Кривая ОФЗ из CSV-файла. Ожидаются колонки: term_months (месяцы), rate (десятичная дробь)."""
+
+    def __init__(self, filename: str = "ofz_2022.csv"):
+        self.terms = []
+        self.rates = []
+        if os.path.exists(filename):
+            with open(filename, newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    self.terms.append(float(row["term_months"]))
+                    self.rates.append(float(row["rate"]))
+            if len(self.terms) < 2:
+                raise ValueError("Недостаточно данных в файле кривой ОФЗ")
+        else:
+            # fallback – используем старую модель
+            self._fallback = YieldCurve(key_rate=0.21)
+
+    def rate(self, term_months: int) -> float:
+        if hasattr(self, '_fallback'):
+            return self._fallback.rate(term_months)
+        # Линейная интерполяция (или экстраполяция)
+        if term_months <= self.terms[0]:
+            return self.rates[0]
+        if term_months >= self.terms[-1]:
+            return self.rates[-1]
+        for i in range(len(self.terms) - 1):
+            t1, t2 = self.terms[i], self.terms[i + 1]
+            if t1 <= term_months <= t2:
+                r1, r2 = self.rates[i], self.rates[i + 1]
+                return r1 + (r2 - r1) * (term_months - t1) / (t2 - t1)
+        return self.rates[-1]  # на всякий случай
 
 
 @dataclass
@@ -260,7 +298,7 @@ class RiskMetrics:
     nii_sensitivity: float = 0.0
     expected_loss: float = 0.0
 
-    def calculate(self, portfolio: Portfolio, yield_curve: YieldCurve):
+    def calculate(self, portfolio: Portfolio, yield_curve):
         gap = portfolio.gap_by_remaining_term(datetime.now())
         avg_years = {"0-90d": 45 / 365, "90-180d": 135 / 365, "180-365d": 272 / 365, ">365d": 2.0}
         self.nii_sensitivity = sum(gap[b] * 0.01 * avg_years[b] for b in gap)

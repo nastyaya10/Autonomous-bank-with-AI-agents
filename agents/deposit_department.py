@@ -16,11 +16,11 @@ class DepositDepartment(LLMAgent):
 
     def propose_deposit(self, client_name: str, amount: float, term_months: int,
                         credit_score: int, current_date: datetime,
-                        risk_free_rate: float = None) -> str:
+                        risk_free_rate: float) -> str:
         deal_id = str(uuid.uuid4())
         write_report(
             f"[{self.name}] Запрашиваю ставку для депозита: {amount} руб., {term_months} мес., ПКР={credit_score}")
-        msg = {
+        self.send(self.treasury_name, {
             "type": "rate_request",
             "deal_id": deal_id,
             "amount": amount,
@@ -28,17 +28,15 @@ class DepositDepartment(LLMAgent):
             "client": client_name,
             "credit_score": credit_score,
             "current_date": current_date.isoformat(),
-        }
-        if risk_free_rate is not None:
-            msg["risk_free_rate"] = risk_free_rate
-        self.send(self.treasury_name, msg)
+            "risk_free_rate": risk_free_rate
+        })
         return deal_id
 
     def receive(self, from_agent: str, message: dict):
         msg_type = message.get("type")
         if msg_type == "rate_response":
             current_date = datetime.fromisoformat(message.get("current_date", datetime.now().isoformat()))
-            rf = message.get("risk_free_rate", None)
+            rf = message.get("risk_free_rate", 0.21)
             write_report(f"[{self.name}] Получена ставка {message['allowed_rate'] * 100:.2f}%. Отправляю клиенту.")
             dep_msg = {
                 "type": "deposit_proposal",
@@ -48,9 +46,8 @@ class DepositDepartment(LLMAgent):
                 "rate": message["allowed_rate"],
                 "credit_score": message.get("credit_score"),
                 "current_date": current_date.isoformat(),
+                "risk_free_rate": rf
             }
-            if rf is not None:
-                dep_msg["risk_free_rate"] = rf
             self.send(message["client"], dep_msg)
         elif msg_type == "client_response":
             deal_id = message["deal_id"]
@@ -59,7 +56,6 @@ class DepositDepartment(LLMAgent):
             if decision == Decision.ACCEPT:
                 self._create_deposit(message, from_agent, current_date, rate=message["rate"])
             elif decision == Decision.COUNTER:
-                # Запрашиваем казначейство о допустимости встречной ставки
                 write_report(f"[{self.name}] Клиент предлагает встречную ставку {message['counter_rate'] * 100:.2f}%")
                 self.send(self.treasury_name, {
                     "type": "counter_request",
@@ -70,6 +66,7 @@ class DepositDepartment(LLMAgent):
                     "client": from_agent,
                     "credit_score": message.get("credit_score"),
                     "current_date": current_date.isoformat(),
+                    "risk_free_rate": message.get("risk_free_rate", 0.21)
                 })
             else:
                 write_report(f"[{self.name}] Клиент {from_agent} отклонил депозит {deal_id[:8]}")

@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import os
-from models import YieldCurve, Portfolio
+from models import RealYieldCurve, Portfolio
 
 
 def setup_plots_dir():
@@ -16,7 +16,7 @@ def plot_time_series(snapshots):
     nii = [s.nii for s in snapshots]
     el = [s.expected_loss for s in snapshots]
 
-    # График портфеля (без нетто-позиции)
+    # График портфеля (кредиты и депозиты)
     plt.figure(figsize=(12, 6))
     plt.plot(dates, loans, label="Кредиты", marker='.', linestyle='-')
     plt.plot(dates, deposits, label="Депозиты", marker='.', linestyle='-')
@@ -50,11 +50,10 @@ def plot_time_series(snapshots):
     plt.savefig("plots/gap_evolution.png")
     plt.close()
 
-    # График NII и EL
+    # График ЧПД (NII)
     plt.figure(figsize=(12, 6))
-    plt.plot(dates, nii, label="NII (накопленный)", color='green')
-    plt.plot(dates, el, label="Ожидаемые потери (EL)", color='orange', linestyle='-.')
-    plt.title("NII и Ожидаемые потери во времени")
+    plt.plot(dates, nii, label="ЧПД (накопленный)", color='green')
+    plt.title("Чистый процентный доход (ЧПД) во времени")
     plt.xlabel("Дата")
     plt.ylabel("Руб.")
     plt.legend()
@@ -62,59 +61,66 @@ def plot_time_series(snapshots):
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.savefig("plots/nii_el.png")
+    plt.savefig("plots/nii.png")
     plt.close()
 
-    # Кривая ОФЗ
-    yc = YieldCurve(key_rate=0.21)
-    terms = [1, 3, 6, 12, 24, 36, 60]
-    rates = [yc.rate(t) * 100 for t in terms]
-    plt.figure(figsize=(8, 5))
-    plt.plot(terms, rates, marker='o', linestyle='-')
-    plt.title("Кривая ОФЗ (ключевая ставка 21% + 2%)")
-    plt.xlabel("Срок, мес.")
-    plt.ylabel("Ставка, %")
+    # График ожидаемых потерь (EL)
+    plt.figure(figsize=(12, 6))
+    plt.plot(dates, el, label="Ожидаемые потери (EL)", color='orange', linestyle='-.')
+    plt.title("Ожидаемые потери (EL) во времени")
+    plt.xlabel("Дата")
+    plt.ylabel("Руб.")
+    plt.legend()
     plt.grid(True)
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+    plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.savefig("plots/yield_curve.png")
+    plt.savefig("plots/el.png")
     plt.close()
 
     print("Все графики сохранены в папку 'plots/'")
 
 
-def plot_deposit_rates(yield_curve: YieldCurve, portfolio: Portfolio):
+def plot_rates_vs_curve(yield_curve, portfolio: Portfolio):
+    """График ставок (депозитов и кредитов) относительно кривой ОФЗ."""
     setup_plots_dir()
     deposits = portfolio.deposits
-    if not deposits:
-        print("Нет активных депозитов для графика ставок.")
-        return
-    deposit_terms = [d.term_months for d in deposits]
-    deposit_rates = [d.rate * 100 for d in deposits]
-    terms_range = sorted(set(deposit_terms + [1, 3, 6, 12, 24, 36, 60]))
-    terms_range = [t for t in terms_range if t > 0]
-    yc_rates = [yield_curve.rate(t) * 100 for t in terms_range]
+    loans = portfolio.loans
+
+    dep_terms = [d.term_months for d in deposits]
+    dep_rates = [d.rate * 100 for d in deposits]
+
+    loan_terms = [l.term_months for l in loans]
+    loan_rates = [l.rate * 100 for l in loans]
+
+    all_terms = sorted(set(dep_terms + loan_terms + [1, 3, 6, 12, 24, 36, 60]))
+    yc_rates = [yield_curve.rate(t) * 100 for t in all_terms]
+
     plt.figure(figsize=(10, 6))
-    plt.plot(terms_range, yc_rates, 'r-', linewidth=2, label='Кривая ОФЗ')
-    plt.scatter(deposit_terms, deposit_rates, color='blue', alpha=0.6, label='Депозитные ставки')
-    plt.title("Соответствие депозитных ставок кривой ОФЗ")
+    plt.plot(all_terms, yc_rates, 'r-', linewidth=2, label='Кривая ОФЗ')
+    if dep_terms:
+        plt.scatter(dep_terms, dep_rates, color='blue', alpha=0.6, label='Депозитные ставки')
+    if loan_terms:
+        plt.scatter(loan_terms, loan_rates, color='green', alpha=0.6, marker='s', label='Кредитные ставки')
+    plt.title("Ставки банка vs кривая ОФЗ")
     plt.xlabel("Срок, мес.")
     plt.ylabel("Ставка, % годовых")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig("plots/deposit_rates_vs_yield_curve.png")
+    plt.savefig("plots/rates_vs_yield_curve.png")
     plt.close()
-    print("График депозитных ставок сохранён в 'plots/deposit_rates_vs_yield_curve.png'")
+    print("График ставок сохранён в 'plots/rates_vs_yield_curve.png'")
 
 
 def plot_stress_test(stress_dates, base_nii, shocked_nii):
     setup_plots_dir()
     plt.figure(figsize=(10, 5))
-    plt.plot(stress_dates, base_nii, label="NII базовый", marker='o')
-    plt.plot(stress_dates, shocked_nii, label="NII после шока (+4%)", marker='x')
-    plt.title("Стресс-тест NII при шоке ключевой ставки на +4%")
+    plt.plot(stress_dates, base_nii, label="ЧПД базовый", marker='o')
+    plt.plot(stress_dates, shocked_nii, label="ЧПД после шока (+4%)", marker='x')
+    plt.title("Стресс-тест ЧПД при шоке ключевой ставки на +4%")
     plt.xlabel("Дата")
-    plt.ylabel("NII, руб.")
+    plt.ylabel("ЧПД, руб.")
     plt.legend()
     plt.grid(True)
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
