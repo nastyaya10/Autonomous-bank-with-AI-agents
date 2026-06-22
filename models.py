@@ -163,29 +163,27 @@ class Portfolio:
         return self.total_loans() - self.total_deposits()
 
     def gap_by_remaining_term(self, current_date: datetime) -> Dict[str, float]:
-        buckets = {"0-90d": 0.0, "90-180d": 0.0, "180-365d": 0.0, ">365d": 0.0}
+        buckets = {"0-1y": 0.0, "1-3y": 0.0, "3-5y": 0.0, ">5y": 0.0}
         for loan in self.loans:
             rem = loan.remaining_term_days(current_date)
-            amt = loan.outstanding_principal
-            if rem <= 90:
-                buckets["0-90d"] += amt
-            elif rem <= 180:
-                buckets["90-180d"] += amt
-            elif rem <= 365:
-                buckets["180-365d"] += amt
+            if rem <= 365:
+                buckets["0-1y"] += loan.outstanding_principal
+            elif rem <= 3 * 365:
+                buckets["1-3y"] += loan.outstanding_principal
+            elif rem <= 5 * 365:
+                buckets["3-5y"] += loan.outstanding_principal
             else:
-                buckets[">365d"] += amt
+                buckets[">5y"] += loan.outstanding_principal
         for dep in self.deposits:
             rem = dep.remaining_term_days(current_date)
-            amt = dep.amount
-            if rem <= 90:
-                buckets["0-90d"] -= amt
-            elif rem <= 180:
-                buckets["90-180d"] -= amt
-            elif rem <= 365:
-                buckets["180-365d"] -= amt
+            if rem <= 365:
+                buckets["0-1y"] -= dep.amount
+            elif rem <= 3 * 365:
+                buckets["1-3y"] -= dep.amount
+            elif rem <= 5 * 365:
+                buckets["3-5y"] -= dep.amount
             else:
-                buckets[">365d"] -= amt
+                buckets[">5y"] -= dep.amount
         return buckets
 
     def weighted_loan_rate(self, key_rate: float) -> float:
@@ -209,41 +207,28 @@ class Portfolio:
         return weighted / total
 
 
-class YieldCurve:
-    """Старая упрощённая модель (используется, если нет реальных данных)."""
-
-    def __init__(self, key_rate: float, base_spread: float = 0.02, term_premium: float = 0.01):
-        self.key_rate = key_rate
-        self.base_spread = base_spread
-        self.term_premium = term_premium
-
-    def rate(self, term_months: int) -> float:
-        years = term_months / 12.0
-        return self.key_rate + self.term_premium * years + self.base_spread
-
-
 class RealYieldCurve:
-    """Кривая ОФЗ из CSV-файла. Ожидаются колонки: term_months (месяцы), rate (десятичная дробь)."""
+    """Загружает кривую ОФЗ из CSV-файла (term_months, rate) и интерполирует."""
 
-    def __init__(self, filename: str = "ofz_2022.csv"):
+    def __init__(self, filename: str = "ofz_curve.csv"):
         self.terms = []
         self.rates = []
-        if os.path.exists(filename):
-            with open(filename, newline='', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    self.terms.append(float(row["term_months"]))
-                    self.rates.append(float(row["rate"]))
-            if len(self.terms) < 2:
-                raise ValueError("Недостаточно данных в файле кривой ОФЗ")
-        else:
-            # fallback – используем старую модель
-            self._fallback = YieldCurve(key_rate=0.21)
+        if not os.path.exists(filename):
+            raise FileNotFoundError(f"Файл {filename} не найден.")
+        with open(filename, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    term = float(row["term_months"])
+                    rate = float(row["rate"])
+                    self.terms.append(term)
+                    self.rates.append(rate)
+                except (ValueError, KeyError):
+                    continue
+        if len(self.terms) < 2:
+            raise ValueError("В файле должно быть минимум две корректные точки")
 
     def rate(self, term_months: int) -> float:
-        if hasattr(self, '_fallback'):
-            return self._fallback.rate(term_months)
-        # Линейная интерполяция (или экстраполяция)
         if term_months <= self.terms[0]:
             return self.rates[0]
         if term_months >= self.terms[-1]:
@@ -253,7 +238,24 @@ class RealYieldCurve:
             if t1 <= term_months <= t2:
                 r1, r2 = self.rates[i], self.rates[i + 1]
                 return r1 + (r2 - r1) * (term_months - t1) / (t2 - t1)
-        return self.rates[-1]  # на всякий случай
+        return self.rates[-1]
+
+
+class StressedYieldCurve:
+    """Кривая ОФЗ, полученная из базовой путём добавления сдвигов на разных сроках."""
+
+    def __init__(self, base_curve: RealYieldCurve, shifts: dict):
+        self.base_curve = base_curve
+        self.shifts = shifts  # {max_term_months: shift_in_percent}
+
+    def rate(self, term_months: int) -> float:
+        base = self.base_curve.rate(term_months)
+        shift = 0.0
+        for limit, s in sorted(self.shifts.items()):
+            if term_months <= limit:
+                shift = s
+                break
+        return base + shift / 100.0
 
 
 @dataclass
@@ -300,7 +302,7 @@ class RiskMetrics:
 
     def calculate(self, portfolio: Portfolio, yield_curve):
         gap = portfolio.gap_by_remaining_term(datetime.now())
-        avg_years = {"0-90d": 45 / 365, "90-180d": 135 / 365, "180-365d": 272 / 365, ">365d": 2.0}
+        avg_years = {"0-1y": 0.5, "1-3y": 2.0, "3-5y": 4.0, ">5y": 7.0}
         self.nii_sensitivity = sum(gap[b] * 0.01 * avg_years[b] for b in gap)
         el = 0.0
         for loan in portfolio.loans:

@@ -4,16 +4,18 @@ from models import Deal, DealType, LoanType, Decision, Portfolio, RepaymentSched
 from llm_agent import LLMAgent
 from utils import write_report
 
-
 class LendingDepartment(LLMAgent):
     def __init__(self, name: str, portfolio: Portfolio, config_list: list,
-                 pnl: PnL, treasury_name: str, all_loans: list = None):
-        system_prompt = """Ты — кредитный департамент."""
+                 pnl: PnL, treasury_name: str, all_loans: list = None,
+                 credit_spread_low: float = 0.06, credit_spread_high: float = 0.08):
+        system_prompt = """Ты — кредитный департамент. Предлагаешь ставку, зависящую от безрисковой кривой и ПКР."""
         super().__init__(name, config_list, system_prompt)
         self.portfolio = portfolio
         self.pnl = pnl
         self.treasury_name = treasury_name
         self.all_loans = all_loans if all_loans is not None else []
+        self.credit_spread_low = credit_spread_low
+        self.credit_spread_high = credit_spread_high
         self.pending_loans = {}
 
     def propose_loan(self, client_name: str, amount: float, term_months: int,
@@ -22,10 +24,12 @@ class LendingDepartment(LLMAgent):
                      schedule: RepaymentSchedule = RepaymentSchedule.ANNUITY,
                      commission_rate: float = 0.0) -> str:
         deal_id = str(uuid.uuid4())
+
+        # Кредитный спред: зависит от ПКР (чем выше ПКР, тем ниже спред)
         norm = (credit_score - 1) / 998
-        credit_spread = 0.05 - 0.02 * norm
+        credit_spread = self.credit_spread_high - (self.credit_spread_high - self.credit_spread_low) * norm
         proposed_rate = risk_free_rate + credit_spread
-        proposed_rate = min(proposed_rate, 0.50)
+        proposed_rate = min(proposed_rate, 0.50)  # ограничение сверху 50%
 
         self.pending_loans[deal_id] = {
             "client_name": client_name, "amount": amount, "term": term_months,
@@ -36,6 +40,7 @@ class LendingDepartment(LLMAgent):
             "min_rate": None
         }
 
+        # Запрашиваем у Treasury минимальную ставку (для проверки)
         self.send(self.treasury_name, {
             "type": "rate_request",
             "deal_id": deal_id,
@@ -69,8 +74,7 @@ class LendingDepartment(LLMAgent):
                 "risk_free_rate": info["risk_free_rate"]
             }
 
-            write_report(
-                f"[{self.name}] Предлагаю кредит {info['amount']} руб. на {info['term']} мес. под {proposed_rate * 100:.2f}%")
+            write_report(f"[{self.name}] Предлагаю кредит {info['amount']} руб. на {info['term']} мес. под {proposed_rate*100:.2f}% (ПКР={info['credit_score']}, ОФЗ={info['risk_free_rate']*100:.2f}%)")
             self.send(info["client_name"], msg_to_client)
 
         elif msg_type == "client_response":
@@ -87,11 +91,10 @@ class LendingDepartment(LLMAgent):
                 client_rate = message["counter_rate"]
                 min_rate = info["min_rate"] if info else 0.0
                 if client_rate >= min_rate:
-                    write_report(f"[{self.name}] Принимаем встречную ставку: {client_rate * 100:.2f}%")
+                    write_report(f"[{self.name}] Принимаем встречную ставку: {client_rate*100:.2f}%")
                     self._create_deal(message, from_agent, current_date, schedule, commission_rate, rate=client_rate)
                 else:
-                    write_report(
-                        f"[{self.name}] Отклоняем встречную ставку {client_rate * 100:.2f}% (ниже минимальной {min_rate * 100:.2f}%)")
+                    write_report(f"[{self.name}] Отклоняем встречную ставку {client_rate*100:.2f}% (ниже минимальной {min_rate*100:.2f}%)")
                     self.send(from_agent, {"type": "reject_counter", "deal_id": deal_id})
             else:
                 write_report(f"[{self.name}] Клиент {from_agent} отклонил кредит {deal_id[:8]}")
@@ -112,11 +115,10 @@ class LendingDepartment(LLMAgent):
             commission_rate=commission_rate
         )
         self.portfolio.add_loan(deal)
-        self.all_loans.append(deal)  # сохраняем для графика
+        self.all_loans.append(deal)
         if commission_rate > 0:
             commission_amount = deal.amount * commission_rate
             self.pnl.add_commission(commission_amount)
             write_report(f"[{self.name}] Комиссия по кредиту: {commission_amount:.2f} руб.")
-        write_report(
-            f"[{self.name}] Кредит {deal.deal_id[:8]} одобрен: {deal.amount} руб. на {deal.term_months} мес. под {deal.rate * 100:.2f}%")
+        write_report(f"[{self.name}] Кредит {deal.deal_id[:8]} одобрен: {deal.amount} руб. на {deal.term_months} мес. под {deal.rate*100:.2f}%")
         self.send(client_name, {"type": "deal_confirmed", "deal_id": deal.deal_id})
