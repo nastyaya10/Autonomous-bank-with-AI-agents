@@ -21,9 +21,15 @@ def plot_time_series(snapshots, label="", suffix=""):
     nii = _to_millions([s.nii for s in snapshots])
     el = _to_millions([s.expected_loss for s in snapshots])
 
+    # Определяем цветовую гамму по суффиксу
+    if suffix == "base":
+        loan_color, dep_color, nii_color, el_color = 'blue', 'cyan', 'darkblue', 'teal'
+    else:  # stress
+        loan_color, dep_color, nii_color, el_color = 'red', 'orange', 'darkred', 'salmon'
+
     plt.figure(figsize=(12, 6))
-    plt.plot(dates, loans, label="Кредиты", marker='.', linestyle='-')
-    plt.plot(dates, deposits, label="Депозиты", marker='.', linestyle='-')
+    plt.plot(dates, loans, label="Кредиты", marker='.', linestyle='-', color=loan_color)
+    plt.plot(dates, deposits, label="Депозиты", marker='.', linestyle='-', color=dep_color)
     plt.title(f"Эволюция портфеля ({label})")
     plt.xlabel("Дата")
     plt.ylabel("млн руб.")
@@ -36,7 +42,7 @@ def plot_time_series(snapshots, label="", suffix=""):
     plt.close()
 
     plt.figure(figsize=(12, 6))
-    plt.plot(dates, nii, label="ЧПД (накопленный)", color='green')
+    plt.plot(dates, nii, label="ЧПД (накопленный)", color=nii_color)
     plt.title(f"Чистый процентный доход ({label})")
     plt.xlabel("Дата")
     plt.ylabel("млн руб.")
@@ -49,7 +55,7 @@ def plot_time_series(snapshots, label="", suffix=""):
     plt.close()
 
     plt.figure(figsize=(12, 6))
-    plt.plot(dates, el, label="Ожидаемые потери (EL)", color='orange', linestyle='-.')
+    plt.plot(dates, el, label="Ожидаемые потери (EL)", color=el_color, linestyle='-.')
     plt.title(f"Ожидаемые потери ({label})")
     plt.xlabel("Дата")
     plt.ylabel("млн руб.")
@@ -67,7 +73,7 @@ def plot_rates_vs_curve(yield_curve, loans: list, deposits: list, label="", suff
     dep_terms = [d.term_months for d in deposits]
     dep_rates = [d.rate * 100 for d in deposits]
 
-    # Добавляем джиттер для кредитных точек
+    # Джиттер для кредитов
     loan_terms = []
     loan_rates = []
     for l in loans:
@@ -79,12 +85,22 @@ def plot_rates_vs_curve(yield_curve, loans: list, deposits: list, label="", suff
     all_terms = sorted(set(dep_terms + [l.term_months for l in loans] + [1, 3, 6, 12, 24, 36, 48, 60, 72, 84]))
     yc_rates = [yield_curve.rate(t) * 100 for t in all_terms]
 
+    # Цветовая схема: база – синие тона, стресс – красные тона
+    if suffix == "base":
+        yc_color = 'blue'
+        dep_color = 'cyan'
+        loan_color = 'darkblue'
+    else:
+        yc_color = 'red'
+        dep_color = 'orange'
+        loan_color = 'darkred'
+
     plt.figure(figsize=(10, 6))
-    plt.plot(all_terms, yc_rates, 'r-', linewidth=2, label='ОФЗ')
+    plt.plot(all_terms, yc_rates, color=yc_color, linewidth=2, label='ОФЗ')
     if dep_terms:
-        plt.scatter(dep_terms, dep_rates, color='blue', alpha=0.9, s=60, label='Депозитные ставки')
+        plt.scatter(dep_terms, dep_rates, color=dep_color, alpha=0.9, s=60, label='Депозитные ставки')
     if loan_terms:
-        plt.scatter(loan_terms, loan_rates, color='green', alpha=0.4, s=60, marker='s', label='Кредитные ставки')
+        plt.scatter(loan_terms, loan_rates, color=loan_color, alpha=0.5, s=60, marker='s', label='Кредитные ставки')
     plt.title(f"Ставки банка vs кривая ОФЗ ({label})")
     plt.xlabel("Срок, мес.")
     plt.ylabel("Ставка, % годовых")
@@ -100,11 +116,11 @@ def plot_stress_test_curve(base_curve, stress_curve,
                            stress_loans, stress_deposits,
                            credit_spread_low=0.06, credit_spread_high=0.08, deposit_discount=0.05):
     """
-    Объединённый график с джиттером для кредитных точек.
+    Объединённый график: база – синие тона, стресс – красные.
     """
     setup_plots_dir()
 
-    # Базовые точки
+    # База: точки (тёмно-синие круги, mediumblue квадраты)
     base_dep_terms = [d.term_months for d in base_deposits]
     base_dep_rates = [d.rate * 100 for d in base_deposits]
 
@@ -116,7 +132,7 @@ def plot_stress_test_curve(base_curve, stress_curve,
         base_loan_terms_jittered.append(t)
         base_loan_rates_jittered.append(r)
 
-    # Стрессовые точки
+    # Стресс: точки (оранжевые круги, красные квадраты)
     stress_dep_terms = [d.term_months for d in stress_deposits]
     stress_dep_rates = [d.rate * 100 for d in stress_deposits]
 
@@ -135,19 +151,20 @@ def plot_stress_test_curve(base_curve, stress_curve,
     stress_yc = [stress_curve.rate(t) * 100 for t in all_terms]
 
     plt.figure(figsize=(12, 7))
-    plt.plot(all_terms, base_yc, 'r-', linewidth=2, label='ОФЗ базовая')
-    plt.plot(all_terms, stress_yc, 'darkblue', linewidth=2, label='ОФЗ стресс')
+    # Базовая ОФЗ – синяя, стрессовая – красная
+    plt.plot(all_terms, base_yc, 'b-', linewidth=2, label='ОФЗ базовая')
+    plt.plot(all_terms, stress_yc, 'r-', linewidth=2, label='ОФЗ стресс')
 
     if base_dep_terms:
         plt.scatter(base_dep_terms, base_dep_rates, color='darkblue', alpha=0.9, s=60, label='Депозиты (база)')
     if base_loan_terms_jittered:
-        plt.scatter(base_loan_terms_jittered, base_loan_rates_jittered, color='darkgreen', alpha=0.9, s=60, marker='s',
+        plt.scatter(base_loan_terms_jittered, base_loan_rates_jittered, color='mediumblue', alpha=0.7, s=60, marker='s',
                     label='Кредиты (база)')
 
     if stress_dep_terms:
         plt.scatter(stress_dep_terms, stress_dep_rates, color='orange', alpha=0.9, s=60, label='Депозиты (стресс)')
     if stress_loan_terms_jittered:
-        plt.scatter(stress_loan_terms_jittered, stress_loan_rates_jittered, color='red', alpha=0.9, s=60, marker='s',
+        plt.scatter(stress_loan_terms_jittered, stress_loan_rates_jittered, color='red', alpha=0.7, s=60, marker='s',
                     label='Кредиты (стресс)')
 
     plt.title("Стресс-тест кривой ОФЗ: текущая vs исторический шок 2022")
@@ -224,11 +241,11 @@ def plot_comparison_lines(base_snapshots, stress_snapshots):
     ax2.plot(base_dates, _to_millions([s.loans for s in base_snapshots]), label="Кредиты базовый", linestyle='-',
              color='blue')
     ax2.plot(base_dates, _to_millions([s.deposits for s in base_snapshots]), label="Депозиты базовый", linestyle='--',
-             color='blue')
+             color='cyan')
     ax2.plot(stress_dates, _to_millions([s.loans for s in stress_snapshots]), label="Кредиты стресс", linestyle='-',
              color='red')
     ax2.plot(stress_dates, _to_millions([s.deposits for s in stress_snapshots]), label="Депозиты стресс",
-             linestyle='--', color='red')
+             linestyle='--', color='orange')
     ax2.set_title("Динамика портфеля")
     ax2.set_ylabel("млн руб.")
     ax2.legend()
