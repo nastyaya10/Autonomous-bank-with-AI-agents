@@ -1,8 +1,8 @@
 from datetime import datetime
+import random
 from llm_agent import LLMAgent
 from models import Decision
 from utils import write_report, logger
-import random
 
 
 class DepositClient(LLMAgent):
@@ -44,8 +44,15 @@ class DepositClient(LLMAgent):
         llm_out = self._call_llm_json(deal_id, prompt)
         decision, _ = self.parse_decision(llm_out)
 
+        # FALLBACK
+        if decision is None:
+            logger.warning(f"[{self.name}] LLM не вернула решение, применяю fallback")
+            if rate_percent >= self.min_rate_willing * 100:
+                decision = Decision.ACCEPT
+            else:
+                decision = Decision.REJECT
+
         if decision == Decision.REJECT and rate_percent < self.min_rate_willing * 100:
-            # Генерируем встречную ставку на 1-2% выше порога, но не более 20%
             counter_percent = min(20.0, self.min_rate_willing * 100 + random.uniform(1.0, 2.0))
             counter_rate = counter_percent / 100.0
             write_report(f"[{self.name}] Встречное предложение: {counter_percent:.2f}%")

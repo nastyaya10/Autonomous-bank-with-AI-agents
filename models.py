@@ -131,6 +131,8 @@ class Portfolio:
     loans: List[Deal] = field(default_factory=list)
     deposits: List[Deal] = field(default_factory=list)
     prepaid_loans: List[Deal] = field(default_factory=list)
+    capital: float = 1_000_000.0
+    cb_position: float = 0.0  # >0 – размещено в ЦБ, <0 – заём у ЦБ
 
     def add_loan(self, deal: Deal):
         self.loans.append(deal)
@@ -208,8 +210,6 @@ class Portfolio:
 
 
 class RealYieldCurve:
-    """Загружает кривую ОФЗ из CSV-файла (term_months, rate) и интерполирует."""
-
     def __init__(self, filename: str = "ofz_curve.csv"):
         self.terms = []
         self.rates = []
@@ -241,21 +241,59 @@ class RealYieldCurve:
         return self.rates[-1]
 
 
-class StressedYieldCurve:
-    """Кривая ОФЗ, полученная из базовой путём добавления сдвигов на разных сроках."""
+class HistoricalYieldCurve:
+    def __init__(self, filename: str = "historical_yields.csv"):
+        self.curves = {}
+        if not os.path.exists(filename):
+            raise FileNotFoundError(f"Файл {filename} не найден.")
+        with open(filename, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            self.term_labels = [col for col in reader.fieldnames if col != 'date']
+            self.hist_terms_years = [float(col) for col in self.term_labels]
+            self.hist_terms_months = [t * 12 for t in self.hist_terms_years]
+            for row in reader:
+                date_str = row['date']
+                rates = []
+                for col in self.term_labels:
+                    try:
+                        val_str = row[col].replace(',', '.')
+                        r = float(val_str)
+                        rates.append(r / 100.0)
+                    except (ValueError, KeyError):
+                        rates.append(0.0)
+                self.curves[date_str] = (self.hist_terms_months, rates)
 
-    def __init__(self, base_curve: RealYieldCurve, shifts: dict):
+    def get_curve(self, date_str: str):
+        return self.curves.get(date_str, (None, None))
+
+    def get_deltas(self, base_date: str, stressed_date: str):
+        _, base_rates = self.curves[base_date]
+        _, stress_rates = self.curves[stressed_date]
+        deltas = [stress_rates[i] - base_rates[i] for i in range(len(base_rates))]
+        return self.hist_terms_months, deltas
+
+
+class StressedYieldCurve:
+    def __init__(self, base_curve: RealYieldCurve, hist_terms_months, deltas):
         self.base_curve = base_curve
-        self.shifts = shifts  # {max_term_months: shift_in_percent}
+        self.hist_terms_months = hist_terms_months
+        self.deltas = deltas
+
+    def _delta_at(self, term_months: int) -> float:
+        if term_months <= self.hist_terms_months[0]:
+            return self.deltas[0]
+        if term_months >= self.hist_terms_months[-1]:
+            return self.deltas[-1]
+        for i in range(len(self.hist_terms_months) - 1):
+            t1, t2 = self.hist_terms_months[i], self.hist_terms_months[i + 1]
+            if t1 <= term_months <= t2:
+                d1, d2 = self.deltas[i], self.deltas[i + 1]
+                return d1 + (d2 - d1) * (term_months - t1) / (t2 - t1)
+        return 0.0
 
     def rate(self, term_months: int) -> float:
         base = self.base_curve.rate(term_months)
-        shift = 0.0
-        for limit, s in sorted(self.shifts.items()):
-            if term_months <= limit:
-                shift = s
-                break
-        return base + shift / 100.0
+        return base + self._delta_at(term_months)
 
 
 @dataclass
@@ -271,6 +309,8 @@ class PnL:
     total_interest_income: float = 0.0
     total_interest_expense: float = 0.0
     total_commission_income: float = 0.0
+    cb_interest_income: float = 0.0
+    cb_interest_expense: float = 0.0
     net_interest_income: float = 0.0
 
     def accrue_daily(self, portfolio: Portfolio, key_rate: float, days: int = 1):
@@ -288,11 +328,27 @@ class PnL:
             expense += dep.amount * daily_rate * days
         self.total_interest_income += income
         self.total_interest_expense += expense
-        self.net_interest_income = self.total_interest_income + self.total_commission_income - self.total_interest_expense
+        self._update_nii()
+
+    def accrue_cb(self, cb_position: float, key_rate: float, days: int = 1):
+        if cb_position > 0:
+            income = cb_position * (key_rate - 0.01) / 365 * days
+            self.cb_interest_income += income
+        elif cb_position < 0:
+            expense = -cb_position * (key_rate + 0.01) / 365 * days
+            self.cb_interest_expense += expense
+        self._update_nii()
 
     def add_commission(self, amount: float):
         self.total_commission_income += amount
-        self.net_interest_income = self.total_interest_income + self.total_commission_income - self.total_interest_expense
+        self._update_nii()
+
+    def _update_nii(self):
+        self.net_interest_income = (self.total_interest_income +
+                                    self.cb_interest_income +
+                                    self.total_commission_income -
+                                    self.total_interest_expense -
+                                    self.cb_interest_expense)
 
 
 @dataclass

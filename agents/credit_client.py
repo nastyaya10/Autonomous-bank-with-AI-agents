@@ -6,7 +6,7 @@ from utils import write_report, logger
 
 
 class CreditClient(LLMAgent):
-    def __init__(self, name: str, config_list: list, max_rate_willing: float = 0.15):
+    def __init__(self, name: str, config_list: list, max_rate_willing: float = 0.40):
         system_prompt = (
             f"Ты клиент-заёмщик. Твой максимум ставки: {max_rate_willing * 100:.1f}% годовых.\n"
             f"Если предложенная ставка <= {max_rate_willing * 100:.1f}%, отвечай {{\"decision\":\"accept\"}}.\n"
@@ -45,7 +45,14 @@ class CreditClient(LLMAgent):
         llm_out = self._call_llm_json(deal_id, prompt)
         decision, _ = self.parse_decision(llm_out)
 
-        # Если LLM отказала, но ставка выше порога – предлагаем counter
+        # FALLBACK: если LLM не дала ответа, применяем простое правило
+        if decision is None:
+            logger.warning(f"[{self.name}] LLM не вернула решение, применяю fallback")
+            if rate_percent <= self.max_rate_willing * 100:
+                decision = Decision.ACCEPT
+            else:
+                decision = Decision.REJECT
+
         if decision == Decision.REJECT and rate_percent > self.max_rate_willing * 100:
             counter_percent = max(1.0, self.max_rate_willing * 100 - random.uniform(1.0, 2.0))
             counter_rate = counter_percent / 100.0
